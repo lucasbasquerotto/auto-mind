@@ -10,6 +10,8 @@ from ._action_impl import (
     MetricsHandlerInput,
     MetricsHandler,
     TensorMetricsHandler,
+    default_batch_info,
+    default_epoch_info,
 )
 from ._general_action import (
     BatchExecutorParams,
