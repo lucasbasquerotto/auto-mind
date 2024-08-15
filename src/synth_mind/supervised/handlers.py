@@ -11,15 +11,6 @@ from ._action_impl import (
     MetricsHandler,
     TensorMetricsHandler,
 )
-from ._dataset import (
-    DatasetGroup,
-    SplitData,
-    ItemsDataset,
-    IterDataset,
-    DirectIterableDataset,
-    DatasetTransformer,
-    DatasetFilter,
-)
 from ._general_action import (
     BatchExecutorParams,
     BatchExecutor,

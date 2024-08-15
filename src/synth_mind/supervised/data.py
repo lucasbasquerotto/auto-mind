@@ -29,3 +29,12 @@ from ._general_action import (
     GeneralTrainParams,
     GeneralTestParams,
 )
+from ._dataset import (
+    DatasetGroup,
+    SplitData,
+    ItemsDataset,
+    IterDataset,
+    DirectIterableDataset,
+    DatasetTransformer,
+    DatasetFilter,
+)
