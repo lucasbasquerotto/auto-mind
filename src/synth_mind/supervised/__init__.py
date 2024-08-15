@@ -1,4 +1,3 @@
-
 from ._manager import (
     Manager,
     DefaultManager,
@@ -6,5 +5,5 @@ from ._manager import (
     ManagerModelParams,
     ManagerOptimizerParams,
     ManagerMetricsParams,
-    SupervisedManagerConfig,
+    ManagerConfig,
 )

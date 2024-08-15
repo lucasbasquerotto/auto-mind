@@ -3,12 +3,12 @@ import torch
 import typing
 from typing import Callable
 from torch import nn
-from supervised._dataset import DatasetGroup
-from supervised._action import (
+from synth_mind.supervised._dataset import DatasetGroup
+from synth_mind.supervised._action import (
     Scheduler, EarlyStopper, SingleModelMinimalEvalParams, TrainEpochInfo,
     TrainBatchInfo)
-from supervised._action_impl import MetricsHandler
-from supervised._general_action import (
+from synth_mind.supervised._action_impl import MetricsHandler
+from synth_mind.supervised._general_action import (
     GeneralActionImpl, GeneralHookParams, GeneralTestParams,
     GeneralTrainParams, BatchAccuracyCalculator, BatchExecutor,
     Evaluator, EvaluatorParams, GeneralBatchAccuracyCalculator,
@@ -96,7 +96,7 @@ class ManagerOptimizerParams:
         self.scheduler = scheduler
         self.step_only_on_accuracy_loss = step_only_on_accuracy_loss
 
-class SupervisedManagerConfig(typing.Generic[I, O]):
+class ManagerConfig(typing.Generic[I, O]):
     def __init__(
         self,
         save_path: str,
@@ -124,7 +124,7 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
         model_params: ManagerModelParams[I, O],
         optimizer_params: ManagerOptimizerParams,
         metrics_params: ManagerMetricsParams[I, O, M, EI, EO],
-        config: SupervisedManagerConfig[I, O],
+        config: ManagerConfig[I, O],
     ):
         train_dataloader = data_params.train_dataloader
         validation_dataloader = data_params.validation_dataloader
@@ -378,7 +378,7 @@ class DefaultManager(Manager[torch.Tensor, torch.Tensor, None, EI, EO], typing.G
         model_params: ManagerModelParams[torch.Tensor, torch.Tensor],
         optimizer_params: ManagerOptimizerParams,
         metrics_params: ManagerMetricsParams[torch.Tensor, torch.Tensor, None, EI, EO],
-        config: SupervisedManagerConfig[torch.Tensor, torch.Tensor],
+        config: ManagerConfig[torch.Tensor, torch.Tensor],
     ):
         super().__init__(
             data_params=data_params,

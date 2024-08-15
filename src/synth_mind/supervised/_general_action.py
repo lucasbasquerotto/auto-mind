@@ -5,11 +5,11 @@ import torch
 import numpy as np
 from torch import Tensor, optim, nn
 from torch.utils.data import DataLoader
-from supervised._action import (
+from synth_mind.supervised._action import (
     AbstractAction, MinimalHookParams, Scheduler, SingleModelMinimalEvalParams,
     SingleModelTestParams, SingleModelTrainParams, SingleModelTestParams,
     SingleModelTrainParams)
-from supervised._action_impl import (
+from synth_mind.supervised._action_impl import (
     ActionWrapper, SingleModelStateHandler, BatchHandler, BatchHandlerData, BatchHandlerRunParams,
     MinimalStateWithMetrics, MetricsHandler)
 
