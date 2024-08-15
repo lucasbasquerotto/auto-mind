@@ -1,0 +1,5 @@
+# Compiled Python bytecode
+*.py[cod]
+
+# Artifact files
+dist/
