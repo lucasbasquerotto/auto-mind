@@ -8,3 +8,15 @@
 - **Semantic Processing Coordination** *(to be done)*: Tools for handling the end-to-end process of vectorizing meanings, processing them through neural architectures, and decoding them into useful formats.
 
 Whether you're building traditional models, exploring reinforcement learning, or working with complex semantic vectors, **SynthMind** provides the infrastructure to manage your projects efficiently while allowing room for customization and expansion.
+
+## Explore SynthMind Examples
+
+To see **SynthMind** in action, explore our dedicated repository for examples and tutorials: [synth-mind-examples](https://github.com/lucasbasquerotto/synth-mind-examples).
+
+This repository contains a variety of examples, including:
+
+- **Supervised Learning**: Learn how to manage and train models using labeled datasets.
+- **Reinforcement Learning** *(to be done)*: Set up RL environments, train agents, and analyze their performance.
+- **Semantic Processing** *(to be done)*: Work with vectorized meanings and process semantic information.
+
+Whether you're getting started or looking to expand your understanding of the **SynthMind** package, these examples will provide valuable insights and practical guidance.
