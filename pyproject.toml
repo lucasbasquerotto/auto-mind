@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "synth_mind"
+version = "0.0.1"
+authors = [
+  { name="Lucas Basquerotto", email="lucasbasquerotto@gmail.com" },
+]
+description = "SynthMind: A Comprehensive Machine Learning Library"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/lucasbasquerotto/synth-mind"
+Issues = "https://github.com/lucasbasquerotto/synth-mind/issues"
