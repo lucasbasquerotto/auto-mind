@@ -102,6 +102,28 @@ class AccuracyEarlyStopper(TrainEarlyStopper):
         super().load_state_dict(state_dict.get('parent', {}))
         return self
 
+class OptimizerChain(optim.Optimizer):
+    def __init__(self, optimizers: list[optim.Optimizer]) -> None:
+        self.optimizers: list[optim.Optimizer] = optimizers
+
+    def zero_grad(self, set_to_none: bool = True) -> None:
+        for optimizer in self.optimizers:
+            optimizer.zero_grad(set_to_none=set_to_none)
+
+    def step(self) -> None: # type: ignore
+        for optimizer in self.optimizers:
+            optimizer.step()
+
+    def state_dict(self) -> dict[str, typing.Any]:
+        return {
+            f'optimizer_{i}': optimizer.state_dict()
+            for i, optimizer in enumerate(self.optimizers)
+        }
+
+    def load_state_dict(self, state_dict: dict[str, typing.Any]) -> None:
+        for i, optimizer in enumerate(self.optimizers):
+            optimizer.load_state_dict(state_dict[f'optimizer_{i}'])
+
 ####################################################
 ################# General Results ##################
 ####################################################

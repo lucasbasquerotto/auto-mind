@@ -5,6 +5,7 @@ from ._action import (
     ChainedEarlyStopper,
     ChainedTrainEarlyStopper,
     AccuracyEarlyStopper,
+    OptimizerChain,
 )
 from ._action_impl import (
     MetricsHandlerInput,
