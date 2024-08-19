@@ -211,16 +211,22 @@ class OutputEvaluator(typing.Generic[I, O, T]):
         raise NotImplementedError()
 
 class LambdaOutputEvaluator(OutputEvaluator[I, O, T], typing.Generic[I, O, T]):
-    def __init__(self, fn: typing.Callable[[GeneralEvalBaseResult[I, O]], T]):
+    def __init__(
+        self,
+        fn: typing.Callable[[GeneralEvalBaseResult[I, O]], T],
+        fn_confidence: typing.Callable[[GeneralEvalBaseResult[I, O]], T] | None = None,
+    ):
         self.fn = fn
+        self.fn_confidence = fn_confidence
 
     def run(self, params: GeneralEvalBaseResult[I, O]) -> GeneralEvalResult[O, T]:
         prediction = self.fn(params)
+        confidence = self.fn_confidence(params) if self.fn_confidence else 0.0
         return GeneralEvalResult(
             full_output=params.full_output,
             main_output=params.main_output,
             prediction=prediction,
-            confidence=0.0)
+            confidence=confidence)
 
 class NoOutputEvaluator(LambdaOutputEvaluator[I, O, None], typing.Generic[I, O]):
     def __init__(self):
@@ -282,7 +288,9 @@ class MaxProbEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, tuple[float, int
     def __init__(self, executor: BatchExecutor[I, torch.Tensor], random_mode=False):
         super().__init__(
             executor=executor,
-            output_evaluator=LambdaOutputEvaluator(self.evaluate),
+            output_evaluator=LambdaOutputEvaluator(
+                fn=self.evaluate,
+                fn_confidence=self.confidence),
             random_mode=random_mode)
 
     def evaluate(self, params: GeneralEvalBaseResult[I, torch.Tensor]) -> tuple[float, int]:
@@ -302,7 +310,9 @@ class AllProbsEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, list[float], li
     def __init__(self, executor: BatchExecutor[I, torch.Tensor], epsilon=1e-7, random_mode=False):
         super().__init__(
             executor=executor,
-            output_evaluator=LambdaOutputEvaluator(self.evaluate),
+            output_evaluator=LambdaOutputEvaluator(
+                fn=self.evaluate,
+                fn_confidence=self.confidence),
             random_mode=random_mode)
         self.epsilon = epsilon
 
@@ -338,7 +348,9 @@ class ValuesEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, list[float], list
     ):
         super().__init__(
             executor=executor,
-            output_evaluator=LambdaOutputEvaluator(self.evaluate),
+            output_evaluator=LambdaOutputEvaluator(
+                fn=self.evaluate,
+                fn_confidence=self.confidence),
             random_mode=random_mode)
         self.log = log
         self.error_margin = error_margin
