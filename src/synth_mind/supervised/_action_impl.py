@@ -1354,6 +1354,11 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
             raise AbortedException()
 
         if (not test_results) or (test_results.batch) or (test_epoch is None) or (test_epoch < epoch):
+            print_str = f'Starting test...'
+            separator = '=' * len(print_str)
+            print(separator)
+            print(print_str)
+
             test_results = TestResult(
                 epoch=epoch,
                 loss=0.0,
@@ -1393,6 +1398,11 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
                 test_results.loss = loss
                 test_results.accuracy = accuracy
                 test_results.total_time = total_time
+
+                print_str = f'Test completed in {total_time:.2f} seconds.'
+                separator = '=' * len(print_str)
+                print(print_str)
+                print(separator)
         else:
             if params.print_every is not None:
                 print(

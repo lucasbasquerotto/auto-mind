@@ -306,6 +306,27 @@ class MaxProbEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, tuple[float, int
     def similarity(self, predicted: int, expected: int) -> float:
         return 1.0 if predicted == expected else 0.0
 
+class MaxProbBatchEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, list[tuple[float, int]], int], typing.Generic[I]):
+    def __init__(self, executor: BatchExecutor[I, torch.Tensor], random_mode=False):
+        super().__init__(
+            executor=executor,
+            output_evaluator=LambdaOutputEvaluator(
+                fn=self.evaluate,
+                fn_confidence=self.confidence),
+            random_mode=random_mode)
+
+    def evaluate(self, params: GeneralEvalBaseResult[I, torch.Tensor]) -> list[tuple[float, int]]:
+        out = params.main_output.detach().numpy()
+        return [(out[i][argmax], argmax) for i, argmax in enumerate(np.argmax(out, axis=1))]
+
+    def confidence(self, params: GeneralEvalBaseResult[I, torch.Tensor]) -> float:
+        results = self.evaluate(params)
+        value = np.mean([v for v, _ in results])
+        return value
+
+    def similarity(self, predicted: int, expected: int) -> float:
+        return 1.0 if predicted == expected else 0.0
+
 class AllProbsEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, list[float], list[float]], typing.Generic[I]):
     def __init__(self, executor: BatchExecutor[I, torch.Tensor], epsilon=1e-7, random_mode=False):
         super().__init__(

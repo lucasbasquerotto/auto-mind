@@ -6,8 +6,8 @@ from torch import nn
 from synth_mind.supervised._dataset import DatasetGroup
 from synth_mind.supervised._action import (
     Scheduler, EarlyStopper, SingleModelMinimalEvalParams, TrainEpochInfo,
-    TrainBatchInfo)
-from synth_mind.supervised._action_impl import MetricsHandler
+    TrainBatchInfo, TestResult)
+from synth_mind.supervised._action_impl import MetricsHandler, MinimalStateWithMetrics
 from synth_mind.supervised._general_action import (
     GeneralActionImpl, GeneralHookParams, GeneralTestParams,
     GeneralTrainParams, BatchAccuracyCalculator, BatchExecutor,
@@ -246,27 +246,38 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
     def train(self, epochs: int):
         self.action.define_as_pending(save_path=self.save_path)
 
-        result = self._train(epochs)
-        finished = result and (result.early_stopped or ((result.epoch or 0) >= epochs))
+        train_results = self._train(epochs)
+        finished = train_results and (train_results.early_stopped or ((train_results.epoch or 0) >= epochs))
+        test_results: TestResult | None = None
+        metrics: dict[str, typing.Any] | None = None
+        completed=False
 
-        if result and finished:
+        if train_results and finished:
             should_test = self.test_dataloader is not None
 
             if should_test:
-                self._test()
+                test_results = self._test()
 
             info = self.info()
 
-            test_results = info.test_results if info and info.test_results else None
-            finished_test = test_results.epoch >= result.epoch if test_results else False
+            finished_test = test_results.epoch >= train_results.epoch if test_results else False
+            completed = info.completed if info else False
 
-            if (finished_test or not should_test) and info and not info.completed:
+            if (finished_test or not should_test) and ((not info) or (not completed)):
                 metrics_params = MetricsCalculatorInputParams(
                     model=self.model,
                     save_path=self.save_path,
                 )
-                self.action.calculate_metrics(metrics_params)
+                metrics = self.action.calculate_metrics(metrics_params)
                 self.action.define_as_completed(save_path=self.save_path)
+                completed = True
+
+        return MinimalStateWithMetrics(
+            completed=completed,
+            train_results=train_results,
+            test_results=test_results,
+            metrics=metrics,
+        )
 
     def _train(self, epochs: int):
         train_dataloader = self.train_dataloader
@@ -313,6 +324,7 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
             save_path=save_path,
             train_hook=train_hook,
             validation_hook=validation_hook,
+            skip_load_state=not bool(save_path),
         )
 
         return action.train(train_params)
@@ -348,9 +360,10 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
             get_batch_info=get_batch_info,
             save_path=save_path,
             hook=test_hook,
+            skip_load_state=not bool(save_path),
         )
 
-        action.test(test_params)
+        return action.test(test_params)
 
     def evaluate(self, input: EI) -> EO:
         evaluator = self.evaluator
@@ -365,10 +378,11 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
 
     def load_model(self):
         model = self.model
-        params = SingleModelMinimalEvalParams(
-            model=model,
-            save_path=self.save_path)
-        self.action.load_eval_state(params)
+        if self.save_path:
+            params = SingleModelMinimalEvalParams(
+                model=model,
+                save_path=self.save_path)
+            self.action.load_eval_state(params)
         return model
 
 class DefaultManager(Manager[torch.Tensor, torch.Tensor, None, EI, EO], typing.Generic[EI, EO]):

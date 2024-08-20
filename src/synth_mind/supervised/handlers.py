@@ -34,6 +34,7 @@ from ._general_action import (
     DefaultEvaluator,
     EvaluatorWithSimilarity,
     MaxProbEvaluator,
+    MaxProbBatchEvaluator,
     AllProbsEvaluator,
     ValuesEvaluator,
 )
