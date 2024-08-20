@@ -3,6 +3,7 @@ import torch
 import typing
 from typing import Callable
 from torch import nn
+from torch.utils.data import DataLoader
 from synth_mind.supervised._dataset import DatasetGroup
 from synth_mind.supervised._action import (
     Scheduler, EarlyStopper, SingleModelMinimalEvalParams, TrainEpochInfo,
@@ -13,7 +14,6 @@ from synth_mind.supervised._general_action import (
     GeneralTrainParams, BatchAccuracyCalculator, BatchExecutor,
     Evaluator, EvaluatorParams, GeneralBatchAccuracyCalculator,
     MetricsCalculatorInputParams, MetricsCalculator)
-from torch.utils.data import DataLoader, RandomSampler
 
 I = typing.TypeVar("I")
 O = typing.TypeVar("O")
