@@ -7,3 +7,13 @@ from ._manager import (
     ManagerMetricsParams,
     ManagerConfig,
 )
+
+__all__ = [
+    'Manager',
+    'DefaultManager',
+    'ManagerDataParams',
+    'ManagerModelParams',
+    'ManagerOptimizerParams',
+    'ManagerMetricsParams',
+    'ManagerConfig',
+]

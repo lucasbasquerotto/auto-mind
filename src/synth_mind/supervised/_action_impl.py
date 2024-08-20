@@ -1,4 +1,4 @@
-
+# ruff: noqa: E741 (ambiguous variable name)
 import os
 import time
 import math
@@ -1140,7 +1140,8 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
         try:
             for epoch in range(start_epoch, epochs + 1):
                 r = verify_early_stop(force_save=True)
-                if r: return r
+                if r:
+                    return r
 
                 batch_handler = TrainBatchHandler(
                     validation=False,
@@ -1330,7 +1331,8 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
                                 save_path=params.save_path)
         except AbortedException:
             r = verify_early_stop(force_save=False)
-            if r: return r
+            if r:
+                return r
             raise AbortedException()
 
         return results
@@ -1354,7 +1356,7 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
             raise AbortedException()
 
         if (not test_results) or (test_results.batch) or (test_epoch is None) or (test_epoch < epoch):
-            print_str = f'Starting test...'
+            print_str = 'Starting test...'
             separator = '=' * len(print_str)
             print(separator)
             print(print_str)

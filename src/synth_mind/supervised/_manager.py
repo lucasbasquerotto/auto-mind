@@ -1,3 +1,4 @@
+# ruff: noqa: E741 (ambiguous variable name)
 import os
 import torch
 import typing

@@ -1,3 +1,4 @@
+# ruff: noqa: E741 (ambiguous variable name)
 import typing
 import torch
 from torch.utils.data import Dataset, IterableDataset, Subset

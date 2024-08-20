@@ -1,3 +1,4 @@
+# ruff: noqa: E741 (ambiguous variable name)
 from typing import Any, Dict, Generic, Protocol, TypeVar
 import typing
 from torch import nn, optim
