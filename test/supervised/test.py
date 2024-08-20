@@ -58,9 +58,6 @@ def test_supervised():
         ),
         optimizer_params=supervised.ManagerOptimizerParams(
             optimizer=torch.optim.Adam(model.parameters(), lr=0.01),
-            scheduler=None,
-            train_early_stopper=None,
-            test_early_stopper=None,
         ),
         metrics_params=supervised.ManagerMetricsParams(
             evaluator=MaxProbBatchEvaluator(executor=GeneralBatchExecutor()),
@@ -71,7 +68,6 @@ def test_supervised():
         config=supervised.ManagerConfig(
             save_path=None,
             random_seed=seed,
-            train_hook=None,
         ),
     )
 
