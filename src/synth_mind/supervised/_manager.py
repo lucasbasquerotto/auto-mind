@@ -39,6 +39,35 @@ class ManagerDataParams(typing.Generic[I]):
         self.validation_dataloader = validation_dataloader
         self.test_dataloader = test_dataloader
 
+    @classmethod
+    def from_datasets(
+        cls,
+        datasets: DatasetGroup[tuple[I, torch.Tensor]],
+        batch_size: int = 64,
+        limit: int | None = None,
+    ) -> typing.Self:
+        if limit:
+            datasets = datasets.limit(limit)
+
+        train_dataloader = DataLoader(
+            datasets.train,
+            batch_size=batch_size)
+
+        validation_dataloader = DataLoader(
+            datasets.validation,
+            batch_size=batch_size
+        ) if datasets.validation is not None else None
+
+        test_dataloader = DataLoader(
+            datasets.test,
+            batch_size=batch_size
+        ) if datasets.test is not None else None
+
+        return cls(
+            train_dataloader=train_dataloader,
+            validation_dataloader=validation_dataloader,
+            test_dataloader=test_dataloader)
+
 class ManagerModelParams(typing.Generic[I, O]):
     def __init__(
         self,
@@ -204,35 +233,6 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
         self.test_hook = test_hook
 
         self.action = action
-
-    @staticmethod
-    def data_from_datasets(
-        datasets: DatasetGroup[tuple[I, torch.Tensor]],
-        batch_size: int = 64,
-        limit: int | None = None,
-    ) -> ManagerDataParams[I]:
-        datasets.limit(limit)
-
-        train_list = [item for item in datasets.train]
-        train_dataloader = DataLoader(
-            datasets.train,
-            sampler=RandomSampler(train_list) if train_list else None,
-            batch_size=batch_size)
-
-        validation_dataloader = DataLoader(
-            datasets.validation,
-            batch_size=batch_size
-        ) if datasets.validation is not None else None
-
-        test_dataloader = DataLoader(
-            datasets.test,
-            batch_size=batch_size
-        ) if datasets.test is not None else None
-
-        return ManagerDataParams(
-            train_dataloader=train_dataloader,
-            validation_dataloader=validation_dataloader,
-            test_dataloader=test_dataloader)
 
     def clear(self):
         save_path = self.save_path

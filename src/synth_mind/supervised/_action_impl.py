@@ -1401,6 +1401,7 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
 
                 print_str = f'Test completed in {total_time:.2f} seconds.'
                 separator = '=' * len(print_str)
+                print(separator)
                 print(print_str)
                 print(separator)
         else:

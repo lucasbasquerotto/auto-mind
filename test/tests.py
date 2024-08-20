@@ -1,0 +1,1 @@
+from supervised.test import test_supervised

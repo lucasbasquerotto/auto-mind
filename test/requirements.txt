@@ -1,0 +1,11 @@
+matplotlib==3.7.4
+numpy==1.24.3
+onnxruntime==1.17.1
+pandas==2.2.0
+requests==2.31.0
+seaborn==0.13.2
+shap==0.46.0
+synth-mind==0.0.4
+torch==2.1.2
+torchtext==0.16.2
+torchvision==0.16.2
