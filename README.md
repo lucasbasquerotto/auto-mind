@@ -11,7 +11,7 @@ Whether you're building traditional models, exploring reinforcement learning, or
 
 ## Explore SynthMind Examples
 
-To see **SynthMind** in action, explore our dedicated repository for examples and tutorials: [synth-mind-examples](https://github.com/lucasbasquerotto/synth-mind-examples).
+To see **SynthMind** in action, explore our dedicated repository for examples and tutorials: [auto-mind-examples](https://github.com/lucasbasquerotto/auto-mind-examples).
 
 This repository contains a variety of examples, including:
 

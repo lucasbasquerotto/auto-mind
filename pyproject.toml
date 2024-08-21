@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "synth_mind"
+name = "auto_mind"
 version = "0.1.4"
 authors = [
   { name="Lucas Basquerotto", email="lucasbasquerotto@gmail.com" },
@@ -18,5 +18,5 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lucasbasquerotto/synth-mind"
-Issues = "https://github.com/lucasbasquerotto/synth-mind/issues"
+Homepage = "https://github.com/lucasbasquerotto/auto-mind"
+Issues = "https://github.com/lucasbasquerotto/auto-mind/issues"

@@ -5,12 +5,12 @@ from typing import Callable
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from synth_mind.supervised._dataset import DatasetGroup
-from synth_mind.supervised._action import (
+from auto_mind.supervised._dataset import DatasetGroup
+from auto_mind.supervised._action import (
     Scheduler, EarlyStopper, SingleModelMinimalEvalParams, TrainEpochInfo,
     TrainBatchInfo, TestResult)
-from synth_mind.supervised._action_impl import MetricsHandler, MinimalStateWithMetrics
-from synth_mind.supervised._general_action import (
+from auto_mind.supervised._action_impl import MetricsHandler, MinimalStateWithMetrics
+from auto_mind.supervised._general_action import (
     GeneralActionImpl, GeneralHookParams, GeneralTestParams,
     GeneralTrainParams, BatchAccuracyCalculator, BatchExecutor,
     Evaluator, EvaluatorParams, GeneralBatchAccuracyCalculator,

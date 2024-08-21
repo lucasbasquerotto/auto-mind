@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/synth-mind
+      url: https://pypi.org/p/auto-mind
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
@@ -128,7 +128,7 @@ jobs:
 
     environment:
       name: testpypi
-      url: https://test.pypi.org/p/synth-mind
+      url: https://test.pypi.org/p/auto-mind
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing

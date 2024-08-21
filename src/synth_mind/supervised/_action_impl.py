@@ -8,7 +8,7 @@ import warnings
 import torch
 import torch.nn as nn
 from torch import optim
-from synth_mind.supervised._action import (
+from auto_mind.supervised._action import (
     BaseResult, MinimalEvalParams, MinimalFullState, MinimalTrainParams, SingleModelEvalState,
     SingleModelFullState, SingleModelMinimalEvalParams, SingleModelTestParams,
     SingleModelTrainParams, TestResult, TrainResult, MinimalTestParams, ExecutionCursor,

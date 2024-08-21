@@ -8,9 +8,9 @@ def test_supervised():
         sys.path.insert(0, package_path)
 
     import torch
-    from synth_mind import supervised
-    from synth_mind.supervised.handlers import GeneralBatchExecutor, MaxProbBatchEvaluator, GeneralBatchAccuracyCalculator
-    from synth_mind.supervised.data import SplitData, ItemsDataset
+    from auto_mind import supervised
+    from auto_mind.supervised.handlers import GeneralBatchExecutor, MaxProbBatchEvaluator, GeneralBatchAccuracyCalculator
+    from auto_mind.supervised.data import SplitData, ItemsDataset
 
     # Define a simple neural network model
     class SimpleNN(torch.nn.Module):
