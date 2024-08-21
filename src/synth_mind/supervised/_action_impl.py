@@ -1401,7 +1401,7 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
                 test_results.accuracy = accuracy
                 test_results.total_time = total_time
 
-                print_str = f'Test completed in {total_time:.2f} seconds.'
+                print_str = f'Test completed in {total_time/1000:.3f} seconds.'
                 separator = '=' * len(print_str)
                 print(separator)
                 print(print_str)
