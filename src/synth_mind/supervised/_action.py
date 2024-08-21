@@ -83,7 +83,7 @@ class ChainedTrainEarlyStopper(TrainEarlyStopper[M], typing.Generic[M]):
             stopper.load_state_dict(state_dict['stoppers'][i])
         return self
 
-class AccuracyEarlyStopper(TrainEarlyStopper):
+class AccuracyEarlyStopper(TrainEarlyStopper[M], typing.Generic[M]):
     def __init__(self, min_accuracy: float, patience: int = 5):
         self.patience = patience
         self.min_accuracy = min_accuracy
@@ -95,7 +95,7 @@ class AccuracyEarlyStopper(TrainEarlyStopper):
     def check(self) -> bool:
         return self.check_finish()
 
-    def update_epoch(self, loss: float, accuracy: float, metrics):
+    def update_epoch(self, loss: float, accuracy: float, metrics: M | None):
         if accuracy < self.min_accuracy:
             self.amount  = 0
         else:
