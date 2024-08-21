@@ -27,14 +27,18 @@ class EarlyStopper:
     def state_dict(self) -> dict[str, typing.Any]:
         return dict()
 
-    def load_state_dict(self, state_dict: dict[str, typing.Any]) -> typing.Self:
+    def load_state_dict(
+        self,
+        state_dict: dict[str, typing.Any], # pylint: disable=unused-argument
+    ) -> typing.Self:
         return self
 
 class TrainEarlyStopper(EarlyStopper, typing.Generic[M]):
     def check_finish(self) -> bool:
         return False
 
-    def update_epoch(self, accuracy: float, metrics: M | None): pass
+    def update_epoch(self, loss: float, accuracy: float, metrics: M | None):
+        pass
 
 class ChainedEarlyStopper(EarlyStopper):
     def __init__(self, stoppers: list[EarlyStopper]):
@@ -61,12 +65,15 @@ class ChainedTrainEarlyStopper(TrainEarlyStopper[M], typing.Generic[M]):
         return any(stopper.check() for stopper in self.stoppers)
 
     def check_finish(self) -> bool:
-        return any(stopper.check_finish() for stopper in self.stoppers if isinstance(stopper, TrainEarlyStopper))
+        return (
+            any(stopper.check_finish()
+            for stopper in self.stoppers
+            if isinstance(stopper, TrainEarlyStopper)))
 
-    def update_epoch(self, accuracy: float, metrics: M | None):
+    def update_epoch(self, loss: float, accuracy: float, metrics: M | None):
         for stopper in self.stoppers:
             if isinstance(stopper, TrainEarlyStopper):
-                stopper.update_epoch(accuracy=accuracy, metrics=metrics)
+                stopper.update_epoch(loss=loss, accuracy=accuracy, metrics=metrics)
 
     def state_dict(self) -> dict[str, typing.Any]:
         return dict(stoppers=[stopper.state_dict() for stopper in self.stoppers])
@@ -88,7 +95,7 @@ class AccuracyEarlyStopper(TrainEarlyStopper):
     def check(self) -> bool:
         return self.check_finish()
 
-    def update_epoch(self, accuracy: float, metrics):
+    def update_epoch(self, loss: float, accuracy: float, metrics):
         if accuracy < self.min_accuracy:
             self.amount  = 0
         else:
@@ -105,13 +112,14 @@ class AccuracyEarlyStopper(TrainEarlyStopper):
 
 class OptimizerChain(optim.Optimizer):
     def __init__(self, optimizers: list[optim.Optimizer]) -> None:
+        super().__init__(params=[], defaults=dict())
         self.optimizers: list[optim.Optimizer] = optimizers
 
     def zero_grad(self, set_to_none: bool = True) -> None:
         for optimizer in self.optimizers:
             optimizer.zero_grad(set_to_none=set_to_none)
 
-    def step(self) -> None: # type: ignore
+    def step(self, closure=None) -> None:
         for optimizer in self.optimizers:
             optimizer.step()
 
@@ -294,7 +302,10 @@ class TrainResult(BaseResult):
             last_epoch_val_times=self.last_epoch_val_times,
             last_epoch_val_metrics=self.last_epoch_val_metrics,
             epoch_cursor=self.epoch_cursor.state_dict() if self.epoch_cursor else None,
-            batch_train_cursor=self.batch_train_cursor.state_dict() if self.batch_train_cursor else None,
+            batch_train_cursor=(
+                self.batch_train_cursor.state_dict()
+                if self.batch_train_cursor
+                else None),
             batch_val_cursor=self.batch_val_cursor.state_dict() if self.batch_val_cursor else None,
         )
 

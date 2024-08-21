@@ -1,4 +1,5 @@
 # ruff: noqa: E741 (ambiguous variable name)
+# pylint: disable=too-many-lines
 import os
 import time
 import math
@@ -36,18 +37,23 @@ STR = typing.TypeVar("STR", bound=MinimalFullState)
 STE = typing.TypeVar("STE", bound=MinimalFullState)
 
 class AbortedException(Exception):
-    def __init__(self):
-        super().__init__()
+    pass
 
 class StateHandler(typing.Generic[INF, ATR, STR, ATE, STE]):
     def __init__(
-            self,
-            info_from_dict: typing.Callable[[dict[str, typing.Any]], INF],
-            train_state_from_dict: typing.Callable[[ATR, dict[str, typing.Any]], STR | None] | None,
-            new_train_state: typing.Callable[[ATR, TrainResult, dict[str, typing.Any] | None], STR | None] | None,
-            test_state_from_dict: typing.Callable[[
-                ATE, dict[str, typing.Any]], STE | None] | None,
-            new_test_state: typing.Callable[[ATE, TestResult, dict[str, typing.Any] | None], STE | None] | None,
+        self,
+        info_from_dict: typing.Callable[[dict[str, typing.Any]], INF],
+        train_state_from_dict: typing.Callable[[ATR, dict[str, typing.Any]], STR | None] | None,
+        new_train_state: typing.Callable[
+            [ATR, TrainResult, dict[str, typing.Any] | None],
+            STR | None
+        ] | None,
+        test_state_from_dict: typing.Callable[[
+            ATE, dict[str, typing.Any]], STE | None] | None,
+        new_test_state: typing.Callable[
+            [ATE, TestResult, dict[str, typing.Any] | None],
+            STE | None
+        ] | None,
     ):
         self._info_from_dict = info_from_dict
         self._train_state_from_dict = train_state_from_dict
@@ -55,7 +61,11 @@ class StateHandler(typing.Generic[INF, ATR, STR, ATE, STE]):
         self._test_state_from_dict = test_state_from_dict
         self._new_test_state = new_test_state
 
-    def _load_state(self, params: P, get_state: typing.Callable[[P, dict[str, typing.Any]], S | None] | None):
+    def _load_state(
+        self,
+        params: P,
+        get_state: typing.Callable[[P, dict[str, typing.Any]], S | None] | None,
+    ):
         state: S | None = None
         state_dict: dict[str, typing.Any] | None = None
 
@@ -69,7 +79,12 @@ class StateHandler(typing.Generic[INF, ATR, STR, ATE, STE]):
 
         return state, state_dict
 
-    def _save_state(self, params: MinimalEvalParams, state: BaseResult | None, last_state_dict: dict[str, typing.Any] | None):
+    def _save_state(
+        self,
+        params: MinimalEvalParams,
+        state: BaseResult | None,
+        last_state_dict: dict[str, typing.Any] | None,
+    ):
         if state and params.save_path:
             state_dict = state.state_dict()
 
@@ -94,7 +109,12 @@ class StateHandler(typing.Generic[INF, ATR, STR, ATE, STE]):
     def load_train_state(self, params: ATR):
         return self._load_state(params, self._train_state_from_dict)
 
-    def save_train_state(self, params: ATR, result: TrainResult, last_state_dict: dict[str, typing.Any] | None):
+    def save_train_state(
+        self,
+        params: ATR,
+        result: TrainResult,
+        last_state_dict: dict[str, typing.Any] | None,
+    ):
         new_train_state = self._new_train_state
 
         if new_train_state and params.save_path:
@@ -107,7 +127,12 @@ class StateHandler(typing.Generic[INF, ATR, STR, ATE, STE]):
     def load_test_state(self, params: ATE):
         return self._load_state(params, self._test_state_from_dict)
 
-    def save_test_state(self, params: ATE, result: TestResult, last_state_dict: dict[str, typing.Any] | None):
+    def save_test_state(
+        self,
+        params: ATE,
+        result: TestResult,
+        last_state_dict: dict[str, typing.Any] | None,
+    ):
         new_test_state = self._new_test_state
 
         if new_test_state and params.save_path:
@@ -158,19 +183,27 @@ class SingleModelStateHandler(StateHandler[
         ],
         typing.Generic[SMTR, SMTE]):
     def __init__(self, use_best: bool):
-        self.get_eval_state = lambda params, state_dict: SingleModelEvalState.from_state_dict_with_params(
-            params,
-            use_best=use_best,
-            state_dict=state_dict)
+        def get_eval_state(params: SMTE, state_dict: dict[str, typing.Any]):
+            return SingleModelEvalState.from_state_dict_with_params(
+                params,
+                use_best=use_best,
+                state_dict=state_dict)
 
-        super().__init__(
-            info_from_dict=lambda state_dict: MinimalStateWithMetrics.from_state_dict(state_dict=state_dict),
-            train_state_from_dict=lambda params, state_dict: SingleModelFullState.from_state_dict_with_params(
+        def info_from_dict(state_dict: dict[str, typing.Any]):
+            return MinimalStateWithMetrics.from_state_dict(state_dict)
+
+        def train_state_from_dict(params: SMTR, state_dict: dict[str, typing.Any]):
+            return SingleModelFullState.from_state_dict_with_params(
                 params,
                 use_best=False,
-                state_dict=state_dict,
-            ),
-            new_train_state=lambda params, train_results, last_state_dict: SingleModelFullState(
+                state_dict=state_dict)
+
+        def new_train_state(
+            params: SMTR,
+            train_results: TrainResult,
+            last_state_dict: dict[str, typing.Any] | None,
+        ):
+            return SingleModelFullState(
                 model=params.model,
                 optimizer=params.optimizer,
                 scheduler=params.scheduler,
@@ -182,16 +215,30 @@ class SingleModelStateHandler(StateHandler[
                     if last_state_dict and last_state_dict.get('test_results')
                     else None),
                 metrics=last_state_dict.get('metrics') if last_state_dict else None,
-            ),
-            test_state_from_dict=self.get_eval_state,
-            new_test_state=lambda params, test_results, last_state_dict: SingleModelEvalState(
+            )
+
+        def new_test_state(
+            params: SMTE,
+            test_results: TestResult,
+            last_state_dict: dict[str, typing.Any] | None,
+        ):
+            return SingleModelEvalState(
                 model=params.model,
                 train_results=TrainResult.from_state_dict(
                     last_state_dict['train_results']),
                 test_results=test_results,
                 metrics=last_state_dict.get('metrics'),
-            ) if last_state_dict and last_state_dict.get('train_results') else None,
+            ) if last_state_dict and last_state_dict.get('train_results') else None
+
+        super().__init__(
+            info_from_dict=info_from_dict,
+            train_state_from_dict=train_state_from_dict,
+            new_train_state=new_train_state,
+            test_state_from_dict=get_eval_state,
+            new_test_state=new_test_state,
         )
+
+        self.get_eval_state = get_eval_state
 
     def load_eval_state(self, params: SingleModelMinimalEvalParams):
         return self._load_state(params, self.get_eval_state)
@@ -232,7 +279,7 @@ class BatchHandlerData(typing.Generic[I, O]):
         amount: int,
         loss: float,
         accuracy: float,
-        input: I,
+        input: I, # pylint: disable=redefined-builtin
         full_output: O,
         output: torch.Tensor,
         target: torch.Tensor,
@@ -246,7 +293,13 @@ class BatchHandlerData(typing.Generic[I, O]):
         self.target = target
 
 class BatchHandlerResult:
-    def __init__(self, total_loss: float, total_accuracy: float, total_time: int, total_metrics: typing.Any | None):
+    def __init__(
+        self,
+        total_loss: float,
+        total_accuracy: float,
+        total_time: int,
+        total_metrics: typing.Any | None,
+    ):
         self.total_loss = total_loss
         self.total_accuracy = total_accuracy
         self.total_time = total_time
@@ -280,7 +333,12 @@ class TensorMetricsHandler(MetricsHandler[torch.Tensor, torch.Tensor, MT], typin
         raise NotImplementedError
 
 class BatchHandler():
-    def __init__(self, cursor: ExecutionCursor | None, metrics_handler: MetricsHandler | None, best_accuracy: float | None):
+    def __init__(
+        self,
+        cursor: ExecutionCursor | None,
+        metrics_handler: MetricsHandler | None,
+        best_accuracy: float | None,
+    ):
         self.amount = cursor.amount if cursor else 0
         self.total_loss = cursor.total_loss if cursor else 0.0
         self.total_accuracy = cursor.total_accuracy if cursor else 0.0
@@ -293,9 +351,8 @@ class BatchHandler():
         """
         Raises exception if the run should be aborted.
         """
-        pass
 
-    def skip(self, batch: int) -> bool:
+    def skip(self, batch: int) -> bool: # pylint: disable=unused-argument
         return True
 
     def handle(
@@ -676,7 +733,8 @@ class GeneralBatchHandler(BatchHandler):
         do_print = (print_every is not None) and (last or (batch % print_every == 0))
         # save every save_every batches, but not on the last batch (it should be saved outside)
         do_save = (save_every is not None) and (last or (batch % save_every == 0))
-        # update the persistent result, which is done when going to save, and also when defining the metrics
+        # update the persistent result, which is done when going to save,
+        # and also when defining the metrics
         do_update = do_save or last or (metric_every is None) or (batch % metric_every == 0)
         # change metric values when updating, as long as metric_every is set
         do_metric = do_update and (metric_every is not None)
@@ -951,8 +1009,14 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
         self,
         state_handler: StateHandler[INF, ATR, STR, ATE, STE],
         train_epoch: typing.Callable[[ActionWrapperActionParams[ATR, STR]], BatchHandlerResult],
-        validate: typing.Callable[[ActionWrapperActionParams[ATR, STR]], BatchHandlerResult | None] | None,
-        test_inner: typing.Callable[[ActionWrapperActionParams[ATE, STE]], BatchHandlerResult | None] | None,
+        validate: typing.Callable[
+            [ActionWrapperActionParams[ATR, STR]],
+            BatchHandlerResult | None
+        ] | None,
+        test_inner: typing.Callable[
+            [ActionWrapperActionParams[ATE, STE]],
+            BatchHandlerResult | None
+        ] | None,
         metrics_handler: MetricsHandler | None,
     ):
         self.state_handler = state_handler
@@ -1110,13 +1174,25 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
 
             if early_stopper:
                 stopped = early_stopper.check()
-                finished = isinstance(early_stopper, TrainEarlyStopper) and early_stopper.check_finish()
+                finished = isinstance(
+                    early_stopper,
+                    TrainEarlyStopper,
+                ) and early_stopper.check_finish()
 
                 if finished or stopped:
                     save_result = (
                         (finished and (not results.early_stopped))
                         or
-                        (force_save and stopped and (epoch > start_epoch) and (epoch > results.epoch)))
+                        (
+                            force_save
+                            and
+                            stopped
+                            and
+                            (epoch > start_epoch)
+                            and
+                            (epoch > results.epoch)
+                        )
+                    )
 
                     if save_result:
                         update_results()
@@ -1175,14 +1251,23 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
                 metric_train_time += train_time
 
                 if train_metrics:
-                    print_metrics = metrics_handler.add(print_metrics, train_metrics) if metrics_handler else None
-                    metrics = metrics_handler.add(metrics, train_metrics) if metrics_handler else None
+                    print_metrics = metrics_handler.add(
+                        print_metrics,
+                        train_metrics,
+                    ) if metrics_handler else None
+                    metrics = metrics_handler.add(
+                        metrics,
+                        train_metrics,
+                    ) if metrics_handler else None
 
                 val_result = None
 
                 if not self.validate:
                     if params.early_stopper and isinstance(params.early_stopper, TrainEarlyStopper):
-                        params.early_stopper.update_epoch(accuracy=train_accuracy, metrics=train_metrics)
+                        params.early_stopper.update_epoch(
+                            loss=train_loss,
+                            accuracy=train_accuracy,
+                            metrics=train_metrics)
                 else:
                     batch_handler = TrainBatchHandler(
                         validation=True,
@@ -1217,21 +1302,44 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
                         metric_val_time += val_time
 
                         if val_metrics_item:
-                            print_val_metrics = metrics_handler.add(print_val_metrics, val_metrics_item) if metrics_handler else None
-                            val_metrics = metrics_handler.add(val_metrics, val_metrics_item) if metrics_handler else None
+                            print_val_metrics = metrics_handler.add(
+                                print_val_metrics,
+                                val_metrics_item,
+                            ) if metrics_handler else None
+                            val_metrics = metrics_handler.add(
+                                val_metrics,
+                                val_metrics_item,
+                            ) if metrics_handler else None
 
-                        if params.early_stopper and isinstance(params.early_stopper, TrainEarlyStopper):
-                            params.early_stopper.update_epoch(accuracy=val_accuracy, metrics=val_metrics_item)
+                        if params.early_stopper and isinstance(
+                            params.early_stopper,
+                            TrainEarlyStopper,
+                        ):
+                            params.early_stopper.update_epoch(
+                                loss=val_loss,
+                                accuracy=val_accuracy,
+                                metrics=val_metrics_item)
 
                 print_count += 1
                 metric_count += 1
                 last = epoch == epochs
 
-                # print every print_every epochs, or if last epoch, or if batch_interval is set (to print partial epochs)
-                do_print = (print_every is not None) and (batch_interval or last or (epoch % print_every == 0))
-                # save every save_every epochs, or if last epoch, or if batch_interval is set (to save partial epochs)
-                do_save = (save_every is not None) and (batch_interval or last or (epoch % save_every == 0))
-                # update changes the result to store, which is done when going to save, and also when defining the metrics
+                # print every print_every epochs, or if last epoch,
+                # or if batch_interval is set (to print partial epochs)
+                do_print = (
+                    (print_every is not None)
+                    and
+                    (batch_interval or last or (epoch % print_every == 0))
+                )
+                # save every save_every epochs, or if last epoch,
+                # or if batch_interval is set (to save partial epochs)
+                do_save = (
+                    (save_every is not None)
+                    and
+                    (batch_interval or last or (epoch % save_every == 0))
+                )
+                # update changes the result to store, which is done when going to save,
+                # and also when defining the metrics
                 do_update = do_save or last or (metric_every is None) or (epoch % metric_every == 0)
                 # change metric values when updating, as long as metric_every is set
                 do_metric = do_update and (metric_every is not None)
@@ -1251,7 +1359,10 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
                         count=print_count,
                         validate=bool(val_result),
                         batch_interval=batch_interval)
-                    get_epoch_info = params.get_epoch_info if params.get_epoch_info else default_epoch_info
+                    get_epoch_info = (
+                        params.get_epoch_info
+                        if params.get_epoch_info else
+                        default_epoch_info)
                     print_str = get_epoch_info(info)
 
                     if print_str:
@@ -1329,11 +1440,11 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
                             save_full_state(
                                 full_state,
                                 save_path=params.save_path)
-        except AbortedException:
+        except AbortedException as e:
             r = verify_early_stop(force_save=False)
             if r:
                 return r
-            raise AbortedException()
+            raise e
 
         return results
 
@@ -1355,7 +1466,15 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
         if not self.can_run(early_stopper):
             raise AbortedException()
 
-        if (not test_results) or (test_results.batch) or (test_epoch is None) or (test_epoch < epoch):
+        if (
+            (not test_results)
+            or
+            test_results.batch
+            or
+            (test_epoch is None)
+            or
+            (test_epoch < epoch)
+        ):
             print_str = 'Starting test...'
             separator = '=' * len(print_str)
             print(separator)
@@ -1408,8 +1527,9 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
                 print(separator)
         else:
             if params.print_every is not None:
-                print(
-                    f'Test already completed (test epoch: {test_epoch}, last trained epoch: {epoch}).')
+                print_str = f'(test epoch: {test_epoch}, last trained epoch: {epoch})'
+                print_str = f'Test already completed ({print_str}).'
+                print(print_str)
 
         if not test_results:
             raise Exception('the test returned no result')
@@ -1434,7 +1554,10 @@ def _load_state_dict(save_path: str | None) -> dict[str, typing.Any] | None:
 
     return None
 
-def _save_state_dict(state_dict: dict[str, typing.Any], save_path: str | None) -> dict[str, typing.Any] | None:
+def _save_state_dict(
+    state_dict: dict[str, typing.Any],
+    save_path: str | None,
+) -> dict[str, typing.Any] | None:
     if save_path:
         if not os.path.exists(os.path.dirname(save_path)):
             os.makedirs(os.path.dirname(save_path))

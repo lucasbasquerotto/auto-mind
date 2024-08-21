@@ -1,8 +1,8 @@
 # ruff: noqa: E741 (ambiguous variable name)
 import os
-import torch
 import typing
 from typing import Callable
+import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from synth_mind.supervised._dataset import DatasetGroup
@@ -248,7 +248,13 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
         self.action.define_as_pending(save_path=self.save_path)
 
         train_results = self._train(epochs)
-        finished = train_results and (train_results.early_stopped or ((train_results.epoch or 0) >= epochs))
+        finished = (
+            train_results is not None
+            and (
+                train_results.early_stopped
+                or ((train_results.epoch or 0) >= epochs)
+            )
+        )
         test_results: TestResult | None = None
         metrics: dict[str, typing.Any] | None = None
         completed=False

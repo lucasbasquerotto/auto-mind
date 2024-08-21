@@ -1,8 +1,9 @@
 # ruff: noqa: E741 (ambiguous variable name)
+# pylint: disable=abstract-method
 import typing
+from typing import Any, Callable, Generator, Generic, Iterable, Sized, TypeVar
 import torch
 from torch.utils.data import Dataset, IterableDataset, Subset
-from typing import Any, Callable, Generator, Generic, Iterable, Sized, TypeVar
 from torch.utils.data import random_split
 
 T = TypeVar("T")
@@ -114,7 +115,12 @@ class SplitData():
         self.test_percent = test_percent
         self.val_percent = val_percent
 
-    def split(self, dataset: Dataset[I], shuffle: bool | None = None, random_seed: int | None = None) -> DatasetGroup[I]:
+    def split(
+        self,
+        dataset: Dataset[I],
+        shuffle: bool | None = None,
+        random_seed: int | None = None,
+    ) -> DatasetGroup[I]:
         if not isinstance(dataset, typing.Sized):
             raise ValueError("Dataset must be sized")
 
@@ -190,7 +196,11 @@ class DatasetTransformer(IterDataset[O], Generic[I, O]):
 
 
 class DatasetFilter(IterDataset[I], Generic[I]):
-    def __init__(self, dataset: Dataset[I], filter: Callable[[I], bool]):
+    def __init__(
+        self,
+        dataset: Dataset[I],
+        filter: Callable[[I], bool],
+    ):
         def generator():
             for item in dataset:
                 if filter(item):

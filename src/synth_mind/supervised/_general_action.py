@@ -49,7 +49,12 @@ class GeneralHookParams(MinimalHookParams, typing.Generic[I, O]):
         self.full_output = full_output
 
 class GeneralEvalBaseResult(typing.Generic[I, O]):
-    def __init__(self, input: I, full_output: O, main_output: Tensor):
+    def __init__(
+        self,
+        input: I,
+        full_output: O,
+        main_output: Tensor,
+    ):
         self.input = input
         self.full_output = full_output
         self.main_output = main_output
@@ -95,7 +100,12 @@ class GeneralAction(
 ####################################################
 
 class BatchExecutorParams(typing.Generic[I, O]):
-    def __init__(self, model: nn.Module, input: I, last_output: O | None):
+    def __init__(
+        self,
+        model: nn.Module,
+        input: I,
+        last_output: O | None,
+    ):
         self.model = model
         self.input = input
         self.last_output = last_output
@@ -115,7 +125,13 @@ class GeneralBatchExecutor(BatchExecutor[Tensor, Tensor]):
         return output
 
 class BatchAccuracyParams(typing.Generic[I, O]):
-    def __init__(self, input: I, full_output: O, output: Tensor, target: Tensor):
+    def __init__(
+        self,
+        input: I,
+        full_output: O,
+        output: Tensor,
+        target: Tensor,
+    ):
         self.input = input
         self.full_output = full_output
         self.output = output
@@ -205,7 +221,11 @@ class MetricsCalculator:
         raise NotImplementedError
 
 class EvaluatorParams(typing.Generic[EI]):
-    def __init__(self, model: nn.Module, input: EI):
+    def __init__(
+        self,
+        model: nn.Module,
+        input: EI,
+    ):
         self.model = model
         self.input = input
 
@@ -291,7 +311,10 @@ class EvaluatorWithSimilarity(DefaultEvaluator[I, O, T], typing.Generic[I, O, T,
     def similarity(self, predicted: P, expected: P) -> float:
         raise NotImplementedError
 
-class MaxProbEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, tuple[float, int], int], typing.Generic[I]):
+class MaxProbEvaluator(
+    EvaluatorWithSimilarity[I, torch.Tensor, tuple[float, int], int],
+    typing.Generic[I],
+):
     def __init__(self, executor: BatchExecutor[I, torch.Tensor], random_mode=False):
         super().__init__(
             executor=executor,
@@ -313,7 +336,10 @@ class MaxProbEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, tuple[float, int
     def similarity(self, predicted: int, expected: int) -> float:
         return 1.0 if predicted == expected else 0.0
 
-class MaxProbBatchEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, list[tuple[float, int]], int], typing.Generic[I]):
+class MaxProbBatchEvaluator(
+    EvaluatorWithSimilarity[I, torch.Tensor, list[tuple[float, int]], int],
+    typing.Generic[I],
+):
     def __init__(self, executor: BatchExecutor[I, torch.Tensor], random_mode=False):
         super().__init__(
             executor=executor,
@@ -334,7 +360,10 @@ class MaxProbBatchEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, list[tuple[
     def similarity(self, predicted: int, expected: int) -> float:
         return 1.0 if predicted == expected else 0.0
 
-class AllProbsEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, list[float], list[float]], typing.Generic[I]):
+class AllProbsEvaluator(
+    EvaluatorWithSimilarity[I, torch.Tensor, list[float], list[float]],
+    typing.Generic[I],
+):
     def __init__(self, executor: BatchExecutor[I, torch.Tensor], epsilon=1e-7, random_mode=False):
         super().__init__(
             executor=executor,
@@ -365,7 +394,10 @@ class AllProbsEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, list[float], li
         similarity = 1.0 - difference
         return similarity.mean()
 
-class ValuesEvaluator(EvaluatorWithSimilarity[I, torch.Tensor, list[float], list[float]], typing.Generic[I]):
+class ValuesEvaluator(
+    EvaluatorWithSimilarity[I, torch.Tensor, list[float], list[float]],
+    typing.Generic[I],
+):
     def __init__(
         self,
         executor: BatchExecutor[I, torch.Tensor],
@@ -429,7 +461,10 @@ class GeneralActionImpl(GeneralAction[I, O, T], typing.Generic[I, O, T]):
         metrics_handler: MetricsHandler | None,
         metrics_calculator: MetricsCalculator | None = None,
     ):
-        main_state_handler = SingleModelStateHandler[GeneralTrainParams, GeneralTestParams](use_best=use_best)
+        main_state_handler = SingleModelStateHandler[
+            GeneralTrainParams,
+            GeneralTestParams,
+        ](use_best=use_best)
 
         action_wrapper = ActionWrapper(
             state_handler=main_state_handler,
@@ -440,7 +475,10 @@ class GeneralActionImpl(GeneralAction[I, O, T], typing.Generic[I, O, T]):
                 hook=params.main_params.train_hook,
                 model=params.main_params.model,
                 optimizer=params.main_params.optimizer,
-                scheduler=None if params.main_params.validation_dataloader is not None else params.main_params.scheduler,
+                scheduler=(
+                    None
+                    if params.main_params.validation_dataloader
+                    is not None else params.main_params.scheduler),
                 criterion=params.main_params.criterion,
                 step_only_on_accuracy_loss=params.main_params.step_only_on_accuracy_loss,
                 clip_grad_max=params.main_params.clip_grad_max,
@@ -497,7 +535,10 @@ class GeneralActionImpl(GeneralAction[I, O, T], typing.Generic[I, O, T]):
         self.main_state_handler = main_state_handler
         self.metrics_calculator = metrics_calculator
 
-    def calculate_metrics(self, params: MetricsCalculatorInputParams) -> dict[str, typing.Any] | None:
+    def calculate_metrics(
+        self,
+        params: MetricsCalculatorInputParams,
+    ) -> dict[str, typing.Any] | None:
         main_state_handler = self.main_state_handler
         metrics_calculator = self.metrics_calculator
         save_path = params.save_path
