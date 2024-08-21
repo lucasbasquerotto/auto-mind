@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "auto_mind"
-version = "0.2.0"
+version = "0.2.1"
 authors = [
   { name="Lucas Basquerotto", email="lucasbasquerotto@gmail.com" },
 ]
-description = "SynthMind: A Comprehensive Machine Learning Library"
+description = "AutoMind: A Comprehensive Machine Learning Library"
 readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [
