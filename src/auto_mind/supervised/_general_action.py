@@ -241,7 +241,7 @@ class LambdaOutputEvaluator(OutputEvaluator[I, O, T], typing.Generic[I, O, T]):
     def __init__(
         self,
         fn: typing.Callable[[GeneralEvalBaseResult[I, O]], T],
-        fn_confidence: typing.Callable[[GeneralEvalBaseResult[I, O]], T] | None = None,
+        fn_confidence: typing.Callable[[GeneralEvalBaseResult[I, O]], float] | None = None,
     ):
         self.fn = fn
         self.fn_confidence = fn_confidence
