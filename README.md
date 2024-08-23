@@ -28,14 +28,6 @@ This section demonstrates how to use the provided code for supervised learning t
 Below is a demo example of how to set up and train a supervised learning model using this codebase. The example uses synthetic data that reaches 100% accuracy and is intended to provide an initial introduction to the manager class. For more complex cases, please refer to the repository [auto-mind-examples](https://github.com/lucasbasquerotto/auto-mind-examples).
 
 ```python
-import sys
-import os
-
-# Add the path to the package to sys.path
-package_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src'))
-if package_path not in sys.path:
-    sys.path.insert(0, package_path)
-
 import torch
 from auto_mind import supervised
 from auto_mind.supervised.handlers import GeneralBatchExecutor, MaxProbBatchEvaluator, GeneralBatchAccuracyCalculator
