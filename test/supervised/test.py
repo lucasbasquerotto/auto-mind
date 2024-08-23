@@ -1,3 +1,4 @@
+# pylint: disable=import-outside-toplevel
 def test_supervised():
     import sys
     import os
@@ -9,7 +10,8 @@ def test_supervised():
 
     import torch
     from auto_mind import supervised
-    from auto_mind.supervised.handlers import GeneralBatchExecutor, MaxProbBatchEvaluator, GeneralBatchAccuracyCalculator
+    from auto_mind.supervised.handlers import (
+        GeneralBatchExecutor, MaxProbBatchEvaluator, GeneralBatchAccuracyCalculator)
     from auto_mind.supervised.data import SplitData, ItemsDataset
 
     # Define a simple neural network model
@@ -23,7 +25,6 @@ def test_supervised():
             x = torch.relu(self.fc1(x))
             return torch.softmax(self.fc2(x), dim=1)
 
-    # Generate synthetic data
     input_size = 10
     hidden_size = 128
     num_classes = 3
@@ -31,6 +32,7 @@ def test_supervised():
     epochs = 2
     seed = 1
 
+    # Generate synthetic data
     def sample(idx: int):
         y = idx % num_classes
         x = [float((j+1)%(y+1) == 0) for j in range(input_size)]

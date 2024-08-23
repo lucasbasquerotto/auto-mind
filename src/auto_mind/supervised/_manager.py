@@ -75,7 +75,7 @@ class ManagerModelParams(typing.Generic[I, O]):
         model: nn.Module,
         criterion: nn.Module,
         executor: BatchExecutor[I, O],
-        use_best: bool,
+        use_best: bool = False,
         clip_grad_max: float | None = None,
     ):
         self.model = model
@@ -129,7 +129,7 @@ class ManagerOptimizerParams:
 class ManagerConfig(typing.Generic[I, O]):
     def __init__(
         self,
-        save_path: str,
+        save_path: str | None = None,
         random_seed: int | None = None,
         device: torch.device | None = None,
         train_hook: Callable[[GeneralHookParams[I, O]], None] | None = None,

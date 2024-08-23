@@ -183,7 +183,7 @@ class SingleModelStateHandler(StateHandler[
         ],
         typing.Generic[SMTR, SMTE]):
     def __init__(self, use_best: bool):
-        def get_eval_state(params: SMTE, state_dict: dict[str, typing.Any]):
+        def get_eval_state(params: SingleModelMinimalEvalParams, state_dict: dict[str, typing.Any]):
             return SingleModelEvalState.from_state_dict_with_params(
                 params,
                 use_best=use_best,
