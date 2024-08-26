@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "auto_mind"
-version = "0.2.6"
+version = "0.2.7"
 authors = [
   { name="Lucas Basquerotto", email="lucasbasquerotto@gmail.com" },
 ]

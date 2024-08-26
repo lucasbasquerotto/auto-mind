@@ -1527,7 +1527,7 @@ class ActionWrapper(typing.Generic[INF, ATR, ATE]):
                 print(separator)
         else:
             if params.print_every is not None:
-                print_str = f'(test epoch: {test_epoch}, last trained epoch: {epoch})'
+                print_str = f'test epoch: {test_epoch}, last trained epoch: {epoch}'
                 print_str = f'Test already completed ({print_str}).'
                 print(print_str)
 
