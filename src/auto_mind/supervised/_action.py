@@ -911,7 +911,7 @@ class SingleModelFullState(MinimalFullState):
 
     @staticmethod
     def from_state_dict_with_params(
-            params: SingleModelTrainParams[Any, Any, Any],
+            params: SingleModelTrainParams[Any, Any, Any, Any],
             use_best: bool,
             state_dict: dict[str, typing.Any]):
         return SingleModelFullState.from_state_dict(
