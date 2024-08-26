@@ -7,7 +7,7 @@ from torch import Tensor, optim, nn
 from torch.utils.data import DataLoader
 from auto_mind.supervised._action import (
     AbstractAction, MinimalHookParams, Scheduler, SingleModelMinimalEvalParams,
-    SingleModelTestParams, SingleModelTrainParams)
+    SingleModelTestParams, SingleModelTrainParams, BatchInOutParams)
 from auto_mind.supervised._action_impl import (
     ActionWrapper, SingleModelStateHandler, BatchHandler, BatchHandlerData, BatchHandlerRunParams,
     MinimalStateWithMetrics, MetricsHandler)
@@ -69,26 +69,28 @@ class GeneralEvalResult(typing.Generic[O, T]):
 class GeneralTrainParams(
     SingleModelTrainParams[
         tuple[I, torch.Tensor],
+        O,
         GeneralHookParams,
         GeneralHookParams,
     ],
-    typing.Generic[I],
+    typing.Generic[I, O],
 ):
     pass
 
 class GeneralTestParams(
     SingleModelTestParams[
         tuple[I, torch.Tensor],
+        O,
         GeneralHookParams,
     ],
-    typing.Generic[I],
+    typing.Generic[I, O],
 ):
     pass
 
 class GeneralAction(
     AbstractAction[
-        GeneralTrainParams[I],
-        GeneralTestParams[I],
+        GeneralTrainParams[I, O],
+        GeneralTestParams[I, O],
         MinimalStateWithMetrics,
     ],
     typing.Generic[I, O, T],
@@ -124,7 +126,7 @@ class GeneralBatchExecutor(BatchExecutor[Tensor, Tensor]):
     def main_output(self, output: Tensor) -> Tensor:
         return output
 
-class BatchAccuracyParams(typing.Generic[I, O]):
+class BatchAccuracyParams(BatchInOutParams[I, O], typing.Generic[I, O]):
     def __init__(
         self,
         input: I,
@@ -132,10 +134,11 @@ class BatchAccuracyParams(typing.Generic[I, O]):
         output: Tensor,
         target: Tensor,
     ):
-        self.input = input
-        self.full_output = full_output
-        self.output = output
-        self.target = target
+        super().__init__(
+            input=input,
+            full_output=full_output,
+            output=output,
+            target=target)
 
 class BatchAccuracyCalculator(typing.Generic[I, O]):
     def run(self, params: BatchAccuracyParams[I, O]) -> float:
@@ -462,8 +465,8 @@ class GeneralActionImpl(GeneralAction[I, O, T], typing.Generic[I, O, T]):
         metrics_calculator: MetricsCalculator | None = None,
     ):
         main_state_handler = SingleModelStateHandler[
-            GeneralTrainParams,
-            GeneralTestParams,
+            GeneralTrainParams[I, O],
+            GeneralTestParams[I, O],
         ](use_best=use_best)
 
         action_wrapper = ActionWrapper(
@@ -573,7 +576,7 @@ class GeneralActionRunner(typing.Generic[I, O, T]):
         model: nn.Module,
         optimizer: optim.Optimizer | None,
         scheduler: Scheduler | None,
-        criterion: nn.Module,
+        criterion: nn.Module | typing.Callable[[BatchInOutParams], torch.Tensor],
         step_only_on_accuracy_loss: bool,
         clip_grad_max: float | None,
         epoch: int,
@@ -635,7 +638,16 @@ class GeneralActionRunner(typing.Generic[I, O, T]):
         output = executor.main_output(full_output)
         self.last_output = full_output
 
-        loss: Tensor = criterion(output, target_batch)
+        if isinstance(criterion, nn.Module):
+            loss: Tensor = criterion(output, target_batch)
+        else:
+            params = BatchAccuracyParams(
+                input=input_batch,
+                full_output=full_output,
+                output=output,
+                target=target_batch)
+            loss = criterion(params)
+
         loss_value = loss.item()
 
         if math.isnan(loss_value):

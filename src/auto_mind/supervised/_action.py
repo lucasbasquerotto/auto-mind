@@ -1,6 +1,7 @@
 # ruff: noqa: E741 (ambiguous variable name)
 from typing import Any, Dict, Generic, Protocol, TypeVar
 import typing
+import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
 
@@ -34,28 +35,16 @@ class EarlyStopper:
         return self
 
 class TrainEarlyStopper(EarlyStopper, typing.Generic[M]):
+    def check(self) -> bool:
+        return self.check_finish()
+
     def check_finish(self) -> bool:
         return False
 
     def update_epoch(self, loss: float, accuracy: float, metrics: M | None):
         pass
 
-class ChainedEarlyStopper(EarlyStopper):
-    def __init__(self, stoppers: list[EarlyStopper]):
-        self.stoppers = stoppers
-
-    def check(self) -> bool:
-        return any(stopper.check() for stopper in self.stoppers)
-
-    def state_dict(self) -> dict[str, typing.Any]:
-        return dict(stoppers=[stopper.state_dict() for stopper in self.stoppers])
-
-    def load_state_dict(self, state_dict: dict[str, typing.Any]) -> typing.Self:
-        for i, stopper in enumerate(self.stoppers):
-            stopper.load_state_dict(state_dict['stoppers'][i])
-        return self
-
-class ChainedTrainEarlyStopper(TrainEarlyStopper[M], typing.Generic[M]):
+class ChainedEarlyStopper(TrainEarlyStopper[M], typing.Generic[M]):
     def __init__(self, stoppers: list[EarlyStopper]):
         self.stoppers = stoppers
 
@@ -92,12 +81,9 @@ class AccuracyEarlyStopper(TrainEarlyStopper[M], typing.Generic[M]):
     def check_finish(self) -> bool:
         return self.amount >= self.patience
 
-    def check(self) -> bool:
-        return self.check_finish()
-
     def update_epoch(self, loss: float, accuracy: float, metrics: M | None):
         if accuracy < self.min_accuracy:
-            self.amount  = 0
+            self.amount = 0
         else:
             self.amount += 1
 
@@ -549,6 +535,7 @@ class MinimalHookParams():
         self.accuracy = accuracy
 
 I = TypeVar("I")
+O = TypeVar("O")
 TRH = TypeVar("TRH", bound=MinimalHookParams)
 TEH = TypeVar("TEH", bound=MinimalHookParams)
 
@@ -677,13 +664,26 @@ class MinimalTrainParams(MinimalEvalParams, Generic[I, TRH, TEH]):
         self.get_epoch_info = get_epoch_info
         self.get_batch_info = get_batch_info
 
-class SingleModelTrainParams(MinimalTrainParams[I, TRH, TEH], Generic[I, TRH, TEH]):
+class BatchInOutParams(typing.Generic[I, O]):
+    def __init__(
+        self,
+        input: I,
+        full_output: O,
+        output: torch.Tensor,
+        target: torch.Tensor,
+    ):
+        self.input = input
+        self.full_output = full_output
+        self.output = output
+        self.target = target
+
+class SingleModelTrainParams(MinimalTrainParams[I, TRH, TEH], Generic[I, O, TRH, TEH]):
     def __init__(
             self,
             train_dataloader: DataLoader[I],
             validation_dataloader: DataLoader[I] | None,
             model: nn.Module,
-            criterion: nn.Module,
+            criterion: nn.Module | typing.Callable[[BatchInOutParams[I, O]], torch.Tensor],
             optimizer: optim.Optimizer,
             epochs: int,
             batch_interval: bool,
@@ -736,12 +736,12 @@ class SingleModelMinimalEvalParams(MinimalEvalParams):
 
         self.model = model
 
-class SingleModelTestParams(MinimalTestParams, Generic[I, TEH]):
+class SingleModelTestParams(MinimalTestParams, Generic[I, O, TEH]):
     def __init__(
             self,
             model: nn.Module,
             dataloader: DataLoader[I],
-            criterion: nn.Module,
+            criterion: nn.Module | typing.Callable[[BatchInOutParams[I, O]], torch.Tensor],
             save_every: int | None,
             print_every: int | None,
             metric_every: int | None,

@@ -114,7 +114,29 @@ for (_, predicted), label in zip(eval_result, y_test):
 
 The `Manager` class is responsible for orchestrating the training, validation, and testing of machine learning models. It can also be used to evaluate an already trained model. It integrates various components such as data loaders, models, optimizers, and metrics to provide a streamlined interface for supervised learning tasks.
 
+The `Executor` is a component used to run a batch of data through the model. It is responsible for executing the forward pass of the model with the given input data and returning the output. The `Executor` can be customized to handle different types of input and output processing, making it versatile for various tasks. The full output returned by the `run` method can be passed across batches in the same epoch (if this is ever needed), defined in the `last_output` property of the argument passed to this method.
+
+The `Executor` is a component used to run a batch of data through the model. It is responsible for executing the forward pass of the model with the given input data and returning the output. The `Executor` can be customized to handle different types of input and output processing, making it versatile for various tasks. The full output returned by the `run` method can be passed across batches within the same epoch, if needed, and is defined in the `last_output` property of the argument passed to this method.
+
+For example, the [GeneralBatchExecutor](/src/auto_mind/supervised/_general_action.py#L122) is the simplest case: it implements the `run` method to pass the input data to the model and return the model's output. This output is also the final output returned by the `main_output()` method, which should be a `Tensor` and will be passed to the loss function (that by default expects an output and a target, both tensors).
+
+The executor of the [NLP From Scratch: Classifying Names with a Character-Level RNN](https://github.com/lucasbasquerotto/auto-mind-examples/blob/main/supervised/char_rnn_classification.ipynb) example returns the output along with a `hidden` tensor in the `run` method (the full output is a tuple of two tensor elements). However, the `main_output` method only returns the first element of the tuple (the actual output) to be used when calculating the loss. In this specific case, tough, the output could be returned alone in the `run` method because the `hidden` tensor is not reused across batches. However, defining it this way is useful, for example, when evaluating the model and wanting to retrieve the hidden tensor (for instance, to inspect it).
+
+The manager expects a single model. If more than one model is trained for a task, they should be included as components of a larger model. The manager also expects a single optimizer, and an [OptimizerChain](/src/auto_mind/supervised/_action.py#L99) can be used to allow several optimizers.
+
+The example [NLP From Scratch: Translation with a Sequence to Sequence Network and Attention](https://github.com/lucasbasquerotto/auto-mind-examples/blob/main/supervised/seq2seq_translation.ipynb), from the examples repository, has the encoder and decoder used together in the `EncoderDecoder` model class, and an optimizer chain with both the encoder and decoder optimizers.
+
+The criterion passed to the manager is the loss function and can either be a torch module that receives the output (returned by the `main_output()` method of the executor) and the target batch from the dataloader, or a function that expects a single parameter of type [BatchInOutParams](/src/auto_mind/supervised/_action.py#L667) that has properties related to the input, target, and the outputs of the executor, and should return a tensor. The function form is useful if you want to use more data generated in the executor, not just a single output tensor, to calculate the loss ([example](https://github.com/lucasbasquerotto/auto-mind-examples/blob/main/supervised/torchvision_tutorial.ipynb)).
+
 The `Evaluator` is an important component used to leverage the model for various tasks. For instance, if you want `manager.evaluate()` to return the string of a category based on an input that is the URL of an image, you can create an evaluator that performs the following steps: loads the image from the URL, converts it into a tensor, passes the tensor to the model, retrieves the category index from the model's output tensor, and then maps the index to the category name to return it. The `Evaluator` is versatile and not necessarily focused on performance assessment; it can handle a wide range of tasks involving model usage, including preprocessing inputs and post-processing outputs. It can even be used in scenarios where the goal is to just print or plot results rather than return a value. That said, the `Evaluator` is an optional component, and any actions can be performed on the trained model by calling the `load_model()` method first and using the model.
+
+Both training and testing can use an `EarlyStopper` to determine if the process should be stopped. There are two types of early stoppers:
+
+1. **General EarlyStopper**: This can be used in both training and testing. It should implement the `check(self) -> bool` method of the `EarlyStopper` base class to verify if the process should be temporarily stopped. This temporary stop will cease the entire process and return a partial result. The training can be continued later. This is useful for stopping a long-running process to release some resources and continue in the future, for example.
+
+2. **TrainEarlyStopper**: This is specific to training and behaves similarly to the general early stopper but with additional functionality. It should implement the `check_finish(self) -> bool` method to stop the process completely, considering that it has ended. It should also implement `update_epoch(self, loss, accuracy, metrics)` to update the state with metrics related to the epoch (to be able to determine if it should stop). Additionally, it should implement `state_dict(self) -> dict` and `load_state_dict(self, state_dict) -> typing.Self` to manage the state of the early stopper and allow the persistence of the state even if the run is interrupted. The loss and accuracy considered are the validation metrics if the training includes a validation step; otherwise, the training metrics are used.
+
+One example of a `TrainEarlyStopper` is the [AccuracyEarlyStopper](/src/auto_mind/supervised/_action.py#L75), which stops and finishes the training after the accuracy meets or exceeds a minimum threshold consecutively across a specified number of epochs. You can use more than one early stopper (either a basic `EarlyStopper`, a `TrainEarlyStopper`, or a combination of both) by passing them to the constructor of [ChainedEarlyStopper](/src/auto_mind/supervised/_action.py#L47).
 
 ### Manager Class
 
@@ -142,7 +164,7 @@ The `Evaluator` is an important component used to leverage the model for various
 |-----------|------|-------------|
 | `model` | `nn.Module` | The neural network model to be trained. |
 | `criterion` | `nn.Module` | The loss function. |
-| `executor` | `BatchExecutor` | Executor for batch operations. See [GeneralBatchExecutor](/src/auto_mind/supervised/_general_action.py#L120) for the simplest case.  |
+| `executor` | `BatchExecutor` | Executor for batch operations. See [GeneralBatchExecutor](/src/auto_mind/supervised/_general_action.py#L122) for the simplest case.  |
 | `use_best` | `bool` | Whether to use the best model based on validation performance when evaluating. Defaults to `False`. |
 | `clip_grad_max` | `float` \| `None` | Maximum gradient clipping value. |
 
@@ -161,7 +183,7 @@ The `Evaluator` is an important component used to leverage the model for various
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `evaluator` | `Evaluator` \| `None` | Evaluator for utilizing the model in various tasks, including input preprocessing and output post-processing. |
-| `accuracy_calculator` | `BatchAccuracyCalculator` \| `None` | Calculator for batch accuracy (defaults to [GeneralBatchAccuracyCalculator](/src/auto_mind/supervised/_general_action.py#L144)). |
+| `accuracy_calculator` | `BatchAccuracyCalculator` \| `None` | Calculator for batch accuracy (defaults to [GeneralBatchAccuracyCalculator](/src/auto_mind/supervised/_general_action.py#L147)). |
 | `metrics_calculator` | `MetricsCalculator` \| `None` | Calculator for additional metrics. |
 | `batch_interval` | `bool` | Whether to calculate metrics and execute other actions (like saving) at batch intervals (instead of epochs). Defaults to `False`. |
 | `default_interval` | `int` \| `None` | Default interval for metric calculation and other actions (like saving). |

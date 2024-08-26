@@ -3,9 +3,9 @@ from ._action import (
     EarlyStopper,
     TrainEarlyStopper,
     ChainedEarlyStopper,
-    ChainedTrainEarlyStopper,
     AccuracyEarlyStopper,
     OptimizerChain,
+    BatchInOutParams,
 )
 from ._action_impl import (
     MetricsHandlerInput,
@@ -44,9 +44,9 @@ __all__ = [
     'EarlyStopper',
     'TrainEarlyStopper',
     'ChainedEarlyStopper',
-    'ChainedTrainEarlyStopper',
     'AccuracyEarlyStopper',
     'OptimizerChain',
+    'BatchInOutParams',
     'MetricsHandlerInput',
     'MetricsHandler',
     'TensorMetricsHandler',
