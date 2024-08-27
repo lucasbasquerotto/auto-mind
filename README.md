@@ -181,7 +181,7 @@ One example of a `TrainEarlyStopper` is the [AccuracyEarlyStopper](/src/auto_min
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `evaluator` | `Evaluator` \| `None` | Evaluator for utilizing the model in various tasks, including input preprocessing and output post-processing. |
-| `accuracy_calculator` | `BatchAccuracyCalculator` \| `None` | Calculator for batch accuracy (defaults to [GeneralBatchAccuracyCalculator](/src/auto_mind/supervised/_general_action.py#L147)). |
+| `accuracy_calculator` | `BatchAccuracyCalculator` \| `None` | Calculator for batch accuracy (an example is [GeneralBatchAccuracyCalculator](/src/auto_mind/supervised/_general_action.py#L147)). |
 | `metrics_calculator` | `MetricsCalculator` \| `None` | Calculator for additional metrics. |
 | `batch_interval` | `bool` | Whether to calculate metrics and execute other actions (like saving) at batch intervals (instead of epochs). Defaults to `False`. |
 | `default_interval` | `int` \| `None` | Default interval for metric calculation and other actions (like saving). |

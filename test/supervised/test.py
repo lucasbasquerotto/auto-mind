@@ -1,5 +1,4 @@
 # pylint: disable=import-outside-toplevel
-# mypy: disable=import-untyped
 def test_supervised() -> None:
     import sys
     import os
@@ -10,10 +9,10 @@ def test_supervised() -> None:
         sys.path.insert(0, package_path)
 
     import torch
-    from auto_mind import supervised
-    from auto_mind.supervised.handlers import (
+    from auto_mind import supervised # type: ignore[import-untyped]
+    from auto_mind.supervised.handlers import ( # type: ignore[import-untyped]
         GeneralBatchExecutor, MaxProbBatchEvaluator, GeneralBatchAccuracyCalculator)
-    from auto_mind.supervised.data import SplitData, ItemsDataset
+    from auto_mind.supervised.data import SplitData, ItemsDataset # type: ignore[import-untyped]
 
     # Define a simple neural network model
     class SimpleNN(torch.nn.Module):
@@ -41,7 +40,10 @@ def test_supervised() -> None:
 
     full_dataset = ItemsDataset([sample(i) for i in range(num_samples)])
 
-    datasets = SplitData(val_percent=0.1, test_percent=0.1).split(full_dataset, shuffle=True, random_seed=seed)
+    datasets = SplitData(val_percent=0.1, test_percent=0.1).split(
+        full_dataset,
+        shuffle=True,
+        random_seed=seed)
 
     torch.manual_seed(seed)
 
@@ -83,7 +85,7 @@ def test_supervised() -> None:
     if accuracy is not None:
         min_acc = 0.999
         print(f'Test Accuracy: {accuracy * 100:.2f}%')
-        assert accuracy > min_acc, f'Test Accuracy ({accuracy * 100:.2f}%) should be more than {min_acc * 100:.2f}%'
+        assert accuracy > min_acc, f'Test Accuracy ({accuracy * 100:.2f}%) should be more than {min_acc * 100:.2f}%' # pylint: disable=line-too-long
 
     assert datasets.test is not None, 'Test dataset should not be None'
     X_test = torch.stack([x for x, _ in datasets.test])
