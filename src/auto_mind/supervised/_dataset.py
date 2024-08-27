@@ -1,5 +1,6 @@
 # ruff: noqa: E741 (ambiguous variable name)
 # pylint: disable=abstract-method
+# mypy: disable-error-code=attr-defined
 import typing
 from typing import Any, Callable, Generator, Generic, Iterable, Sized, TypeVar
 import torch
@@ -63,7 +64,7 @@ class DatasetGroup(Dataset[I], Generic[I]):
 
         idx = 0
 
-        if self.validation:
+        if self.validation is not None:
             for item in self.validation:
                 if idx >= limit:
                     break
@@ -73,7 +74,7 @@ class DatasetGroup(Dataset[I], Generic[I]):
 
         idx = 0
 
-        if self.test:
+        if self.test is not None:
             for item in self.test:
                 if idx >= limit:
                     break
@@ -154,16 +155,15 @@ class SplitData():
             validation=val_dataset,
             test=test_dataset)
 
-
 class ItemsDataset(Dataset[I], Generic[I]):
     def __init__(self, items: list[I]):
         self.items = items
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> I:
         item = self.items[idx]
         return item
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.items)
 
 
@@ -171,7 +171,7 @@ class IterDataset(IterableDataset[I], Generic[I]):
     def __init__(self, generator: Callable[[], Generator[I, Any, None]]):
         self.generator = generator
 
-    def __iter__(self):
+    def __iter__(self) -> Generator[I, typing.Any, None]:
         return self.generator()
 
 
@@ -179,13 +179,13 @@ class DirectIterableDataset(IterableDataset[I], Generic[I]):
     def __init__(self, iterable: Iterable[I]):
         self.iterable = iterable
 
-    def __iter__(self):
+    def __iter__(self) -> typing.Iterator[I]:
         return iter(self.iterable)
 
 
 class DatasetTransformer(IterDataset[O], Generic[I, O]):
     def __init__(self, dataset: Dataset[I], transform: Callable[[I], O]):
-        def generator():
+        def generator() -> typing.Generator[O, None, None]:
             for item in dataset:
                 yield transform(item)
 
@@ -194,14 +194,13 @@ class DatasetTransformer(IterDataset[O], Generic[I, O]):
         if isinstance(dataset, Sized):
             self.__len__ = dataset.__len__
 
-
 class DatasetFilter(IterDataset[I], Generic[I]):
     def __init__(
         self,
         dataset: Dataset[I],
         filter: Callable[[I], bool],
     ):
-        def generator():
+        def generator() -> typing.Generator[I, None, None]:
             for item in dataset:
                 if filter(item):
                     yield item

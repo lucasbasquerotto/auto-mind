@@ -6,6 +6,7 @@ from ._manager import (
     ManagerOptimizerParams,
     ManagerMetricsParams,
     ManagerConfig,
+    ManagerTrainResult,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     'ManagerOptimizerParams',
     'ManagerMetricsParams',
     'ManagerConfig',
+    'ManagerTrainResult',
 ]

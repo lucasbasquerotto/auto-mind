@@ -1,5 +1,6 @@
 # pylint: disable=import-outside-toplevel
-def test_supervised():
+# mypy: disable=import-untyped
+def test_supervised() -> None:
     import sys
     import os
 
@@ -21,7 +22,7 @@ def test_supervised():
             self.fc1 = torch.nn.Linear(input_size, hidden_size)
             self.fc2 = torch.nn.Linear(hidden_size, num_classes)
 
-        def forward(self, x):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
             x = torch.relu(self.fc1(x))
             return torch.softmax(self.fc2(x), dim=1)
 
@@ -33,7 +34,7 @@ def test_supervised():
     seed = 1
 
     # Generate synthetic data
-    def sample(idx: int):
+    def sample(idx: int) -> tuple[torch.Tensor, int]:
         y = idx % num_classes
         x = [float((j+1)%(y+1) == 0) for j in range(input_size)]
         return torch.tensor(x), y
@@ -79,9 +80,10 @@ def test_supervised():
     assert info.test_results is not None, 'Test results should not be None'
 
     accuracy = info.test_results.accuracy
-    min_acc = 0.999
-    print(f'Test Accuracy: {accuracy * 100:.2f}%')
-    assert accuracy > min_acc, f'Test Accuracy ({accuracy * 100:.2f}%) should be more than {min_acc * 100:.2f}%'
+    if accuracy is not None:
+        min_acc = 0.999
+        print(f'Test Accuracy: {accuracy * 100:.2f}%')
+        assert accuracy > min_acc, f'Test Accuracy ({accuracy * 100:.2f}%) should be more than {min_acc * 100:.2f}%'
 
     assert datasets.test is not None, 'Test dataset should not be None'
     X_test = torch.stack([x for x, _ in datasets.test])

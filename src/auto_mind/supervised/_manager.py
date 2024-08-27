@@ -8,13 +8,13 @@ from torch.utils.data import DataLoader
 from auto_mind.supervised._dataset import DatasetGroup
 from auto_mind.supervised._action import (
     Scheduler, EarlyStopper, SingleModelMinimalEvalParams, TrainEpochInfo,
-    TrainBatchInfo, TestResult, BatchInOutParams)
+    TrainBatchInfo, TrainResult, TestResult, BatchInOutParams)
 from auto_mind.supervised._action_impl import MetricsHandler, MinimalStateWithMetrics
 from auto_mind.supervised._general_action import (
     GeneralActionImpl, GeneralHookParams, GeneralTestParams,
     GeneralTrainParams, BatchAccuracyCalculator, BatchExecutor,
-    Evaluator, EvaluatorParams, GeneralBatchAccuracyCalculator,
-    MetricsCalculatorInputParams, MetricsCalculator)
+    Evaluator, EvaluatorParams, MetricsCalculatorInputParams,
+    MetricsCalculator,)
 
 I = typing.TypeVar("I")
 O = typing.TypeVar("O")
@@ -88,9 +88,9 @@ class ManagerMetricsParams(typing.Generic[I, O, M, EI, EO]):
     def __init__(
         self,
         evaluator: Evaluator[EI, EO] | None = None,
-        accuracy_calculator: BatchAccuracyCalculator | None = None,
+        accuracy_calculator: BatchAccuracyCalculator[I, O] | None = None,
         metrics_calculator: MetricsCalculator | None = None,
-        batch_interval=False,
+        batch_interval: bool = False,
         default_interval: int | None = 1,
         save_every: int | None = None,
         print_every: int | None = None,
@@ -98,7 +98,7 @@ class ManagerMetricsParams(typing.Generic[I, O, M, EI, EO]):
         get_epoch_info: typing.Callable[[TrainEpochInfo[M]], str] | None = None,
         get_batch_info: typing.Callable[[TrainBatchInfo[M]], str] | None = None,
         train_metrics_handler: MetricsHandler[I, O, M] | None = None,
-    ):
+    ) -> None:
         self.evaluator = evaluator
         self.accuracy_calculator = accuracy_calculator
         self.metrics_calculator = metrics_calculator
@@ -142,6 +142,19 @@ class ManagerConfig(typing.Generic[I, O]):
         self.train_hook = train_hook
         self.validation_hook = validation_hook
         self.test_hook = test_hook
+
+class ManagerTrainResult:
+    def __init__(
+        self,
+        completed: bool,
+        train_results: TrainResult | None,
+        test_results: TestResult | None,
+        metrics: dict[str, typing.Any] | None,
+    ):
+        self.train_results = train_results
+        self.test_results = test_results
+        self.metrics = metrics
+        self.completed = completed
 
 ####################################################
 ##################### Manager ######################
@@ -197,11 +210,11 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
 
         model.to(device)
 
-        action = GeneralActionImpl(
+        action: GeneralActionImpl[I, O, M] = GeneralActionImpl(
             random_seed=random_seed,
             use_best=use_best,
             executor=executor,
-            accuracy_calculator=accuracy_calculator or GeneralBatchAccuracyCalculator(),
+            accuracy_calculator=accuracy_calculator,
             metrics_calculator=metrics_calculator,
             metrics_handler=train_metrics_handler)
 
@@ -235,17 +248,25 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
 
         self.action = action
 
-    def clear(self):
+    def clear(self) -> None:
         save_path = self.save_path
         if save_path and os.path.exists(save_path):
             os.remove(save_path)
 
-    def info(self):
+    def info(self) -> ManagerTrainResult | None:
         save_path = self.save_path
-        return self.action.info(save_path) if save_path else None
+        action_info = self.action.info(save_path) if save_path else None
+        result = ManagerTrainResult(
+            completed=action_info.completed,
+            train_results=action_info.train_results,
+            test_results=action_info.test_results,
+            metrics=action_info.metrics,
+        ) if action_info else None
+        return result
 
-    def train(self, epochs: int):
-        self.action.define_as_pending(save_path=self.save_path)
+    def train(self, epochs: int) -> ManagerTrainResult:
+        if self.save_path is not None:
+            self.action.define_as_pending(save_path=self.save_path)
 
         train_results = self._train(epochs)
         finished = (
@@ -276,17 +297,18 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
                     save_path=self.save_path,
                 )
                 metrics = self.action.calculate_metrics(metrics_params)
-                self.action.define_as_completed(save_path=self.save_path)
+                if self.save_path is not None:
+                    self.action.define_as_completed(save_path=self.save_path)
                 completed = True
 
-        return MinimalStateWithMetrics(
+        return ManagerTrainResult(
             completed=completed,
             train_results=train_results,
             test_results=test_results,
             metrics=metrics,
         )
 
-    def _train(self, epochs: int):
+    def _train(self, epochs: int) -> TrainResult | None:
         train_dataloader = self.train_dataloader
         validation_dataloader = self.validation_dataloader
 
@@ -336,7 +358,7 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
 
         return action.train(train_params)
 
-    def _test(self):
+    def _test(self) -> TestResult | None:
         test_dataloader = self.test_dataloader
 
         model = self.model
@@ -383,7 +405,7 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
             params = EvaluatorParams(model=model, input=input)
             return evaluator.run(params)
 
-    def load_model(self):
+    def load_model(self) -> nn.Module:
         model = self.model
         if self.save_path:
             params = SingleModelMinimalEvalParams(
