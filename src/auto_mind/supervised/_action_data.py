@@ -9,9 +9,10 @@ from torch.utils.data import DataLoader
 ############### Protocols and Types ################
 ####################################################
 
-I = typing.TypeVar("I")
+I = typing.TypeVar("I", bound=typing.Sized)
 O = typing.TypeVar("O")
 T = typing.TypeVar("T")
+TG = typing.TypeVar("TG", bound=typing.Sized)
 MT = typing.TypeVar("MT")
 
 class Scheduler(Protocol):
@@ -412,7 +413,7 @@ class MinimalHookParams():
         self.loss = loss
         self.accuracy = accuracy
 
-class GeneralHookParams(MinimalHookParams, typing.Generic[I, O]):
+class GeneralHookParams(MinimalHookParams, typing.Generic[I, O, TG]):
     def __init__(
         self,
         epoch: int,
@@ -420,7 +421,7 @@ class GeneralHookParams(MinimalHookParams, typing.Generic[I, O]):
         current_amount: int,
         loss: float,
         accuracy: float | None,
-        target: torch.Tensor,
+        target: TG,
         input: I,
         output: O | None,
     ):
@@ -527,12 +528,12 @@ class TrainEpochInfo(typing.Generic[MT]):
         self.validate = validate
         self.batch_interval = batch_interval
 
-class BatchInOutParams(typing.Generic[I, O]):
+class BatchInOutParams(typing.Generic[I, O, TG]):
     def __init__(
         self,
         input: I,
         output: O,
-        target: torch.Tensor,
+        target: TG,
     ):
         self.input = input
         self.output = output
@@ -553,14 +554,14 @@ class EvalParams(MinimalEvalParams):
 
 class TrainParams(
     MinimalEvalParams,
-    typing.Generic[I, O, MT],
+    typing.Generic[I, O, TG, MT],
 ):
     def __init__(
         self,
-        train_dataloader: DataLoader[tuple[I, torch.Tensor]],
-        validation_dataloader: DataLoader[tuple[I, torch.Tensor]] | None,
+        train_dataloader: DataLoader[tuple[I, TG]],
+        validation_dataloader: DataLoader[tuple[I, TG]] | None,
         model: nn.Module,
-        criterion: nn.Module | typing.Callable[[BatchInOutParams[I, O]], torch.Tensor],
+        criterion: nn.Module | typing.Callable[[BatchInOutParams[I, O, TG]], torch.Tensor],
         optimizer: optim.Optimizer,
         epochs: int,
         batch_interval: bool,
@@ -573,8 +574,8 @@ class TrainParams(
         early_stopper: EarlyStopper | None = None,
         get_epoch_info: typing.Callable[[TrainEpochInfo[MT]], str] | None = None,
         get_batch_info: typing.Callable[[TrainBatchInfo[MT]], str] | None = None,
-        train_hook: typing.Callable[[GeneralHookParams[I, O]], None] | None = None,
-        validation_hook: typing.Callable[[GeneralHookParams[I, O]], None] | None = None,
+        train_hook: typing.Callable[[GeneralHookParams[I, O, TG]], None] | None = None,
+        validation_hook: typing.Callable[[GeneralHookParams[I, O, TG]], None] | None = None,
         save_path: str | None = None,
         skip_load_state: bool = False,
     ) -> None:
@@ -602,18 +603,18 @@ class TrainParams(
         self.step_only_on_accuracy_loss = step_only_on_accuracy_loss
         self.clip_grad_max = clip_grad_max
 
-class TestParams(MinimalEvalParams, typing.Generic[I, O, MT]):
+class TestParams(MinimalEvalParams, typing.Generic[I, O, TG, MT]):
     def __init__(
         self,
         model: nn.Module,
-        dataloader: DataLoader[tuple[I, torch.Tensor]],
-        criterion: nn.Module | typing.Callable[[BatchInOutParams[I, O]], torch.Tensor],
+        dataloader: DataLoader[tuple[I, TG]],
+        criterion: nn.Module | typing.Callable[[BatchInOutParams[I, O, TG]], torch.Tensor],
         save_every: int | None,
         print_every: int | None,
         metric_every: int | None,
         early_stopper: EarlyStopper | None = None,
         get_batch_info: typing.Callable[[TrainBatchInfo[MT]], str] | None = None,
-        hook: typing.Callable[[GeneralHookParams[I, O]], None] | None = None,
+        hook: typing.Callable[[GeneralHookParams[I, O, TG]], None] | None = None,
         save_path: str | None = None,
         skip_load_state: bool = False,
     ) -> None:
@@ -777,7 +778,7 @@ class FullState(MinimalFullState):
 
     @staticmethod
     def from_state_dict_with_params(
-        params: TrainParams[Any, Any, Any],
+        params: TrainParams[Any, Any, Any, Any],
         use_best: bool,
         state_dict: dict[str, Any],
     ) -> 'FullState':

@@ -20,9 +20,10 @@ from auto_mind.supervised._batch_handlers import (
     BatchHandlerData, MetricsHandler, BatchHandler, BatchHandlerResult,
     TrainBatchHandler, TestBatchHandler, BatchHandlerRunParams)
 
-I = typing.TypeVar("I")
+I = typing.TypeVar("I", bound=typing.Sized)
 O = typing.TypeVar("O")
 T = typing.TypeVar('T')
+TG = typing.TypeVar("TG", bound=typing.Sized)
 M = typing.TypeVar("M", bound=nn.Module)
 OT = typing.TypeVar("OT", bound=optim.Optimizer)
 RV = typing.TypeVar("RV", bound=BaseResult)
@@ -31,9 +32,9 @@ MT = typing.TypeVar("MT")
 S = typing.TypeVar("S", bound=BaseResult)
 
 ATR = typing.TypeVar("ATR", bound=TrainParams[
-    typing.Any, typing.Any, typing.Any])
+    typing.Any, typing.Any, typing.Any, typing.Any])
 ATE = typing.TypeVar("ATE", bound=TestParams[
-    typing.Any, typing.Any, typing.Any])
+    typing.Any, typing.Any, typing.Any, typing.Any])
 
 AWP = typing.TypeVar("AWP")
 AWS = typing.TypeVar("AWS")
@@ -42,19 +43,19 @@ AWS = typing.TypeVar("AWS")
 ############### General Action Impl ################
 ####################################################
 
-class GeneralAction(typing.Generic[I, O, MT]):
+class GeneralAction(typing.Generic[I, O, TG, MT]):
     def __init__(
         self,
         random_seed: int | None,
         use_best: bool,
         executor: BatchExecutor[I, O],
-        accuracy_calculator: BatchAccuracyCalculator[I, O] | None,
-        metrics_handler: MetricsHandler[I, O, MT] | None,
+        accuracy_calculator: BatchAccuracyCalculator[I, O, TG] | None,
+        metrics_handler: MetricsHandler[I, O, TG, MT] | None,
         metrics_calculator: MetricsCalculator | None = None,
     ):
         main_state_handler = StateHandler[
-            TrainParams[I, O, MT],
-            TestParams[I, O, MT],
+            TrainParams[I, O, TG, MT],
+            TestParams[I, O, TG, MT],
         ](use_best=use_best)
 
         self.state_handler = main_state_handler
@@ -666,11 +667,11 @@ class GeneralAction(typing.Generic[I, O, MT]):
         is_train: bool,
         dataloader: DataLoader[tuple[I, torch.Tensor]],
         model: torch.nn.Module,
-        criterion: torch.nn.Module | typing.Callable[[BatchInOutParams[I, O]], torch.Tensor],
+        criterion: torch.nn.Module | typing.Callable[[BatchInOutParams[I, O, TG]], torch.Tensor],
         optimizer: optim.Optimizer | None,
         scheduler: Scheduler | None,
         clip_grad_max: float | None,
-        hook: typing.Callable[[GeneralHookParams[I, O]], None] | None,
+        hook: typing.Callable[[GeneralHookParams[I, O, TG]], None] | None,
         step_only_on_accuracy_loss: bool,
         batch_handler: BatchHandler,
     ) -> BatchHandlerResult:
@@ -716,15 +717,15 @@ class GeneralAction(typing.Generic[I, O, MT]):
 
     def _run_batch(
         self,
-        params: BatchHandlerRunParams[tuple[I, torch.Tensor]],
+        params: BatchHandlerRunParams[tuple[I, TG]],
         epoch: int,
         is_train: bool,
         model: torch.nn.Module,
-        criterion: torch.nn.Module | typing.Callable[[BatchInOutParams[I, O]], torch.Tensor],
+        criterion: torch.nn.Module | typing.Callable[[BatchInOutParams[I, O, TG]], torch.Tensor],
         optimizer: optim.Optimizer | None,
         clip_grad_max: float | None,
-        hook: typing.Callable[[GeneralHookParams[I, O]], None] | None,
-    ) -> BatchHandlerData[I, O]:
+        hook: typing.Callable[[GeneralHookParams[I, O, TG]], None] | None,
+    ) -> BatchHandlerData[I, O, TG]:
         executor = self.executor
         accuracy_calculator = self.accuracy_calculator
 

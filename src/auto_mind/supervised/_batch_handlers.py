@@ -10,9 +10,10 @@ from auto_mind.supervised._action_data import (
     TrainBatchInfo, TrainParams, TestParams)
 from auto_mind.supervised._action_handlers import AbortedException
 
-I = typing.TypeVar("I")
+I = typing.TypeVar("I", bound=typing.Sized)
 O = typing.TypeVar("O")
 T = typing.TypeVar('T')
+TG = typing.TypeVar("TG", bound=typing.Sized)
 M = typing.TypeVar("M", bound=nn.Module)
 OT = typing.TypeVar("OT", bound=optim.Optimizer)
 RV = typing.TypeVar("RV", bound=BaseResult)
@@ -21,9 +22,9 @@ MT = typing.TypeVar("MT")
 S = typing.TypeVar("S", bound=BaseResult)
 
 ATR = typing.TypeVar("ATR", bound=TrainParams[
-    typing.Any, typing.Any, typing.Any])
+    typing.Any, typing.Any, typing.Any, typing.Any])
 ATE = typing.TypeVar("ATE", bound=TestParams[
-    typing.Any, typing.Any, typing.Any])
+    typing.Any, typing.Any, typing.Any, typing.Any])
 
 AWP = typing.TypeVar("AWP")
 AWS = typing.TypeVar("AWS")
@@ -34,7 +35,7 @@ class BatchHandlerRunParams(typing.Generic[I]):
         self.batch = batch
         self.amount = amount
 
-class BatchHandlerData(typing.Generic[I, O]):
+class BatchHandlerData(typing.Generic[I, O, TG]):
     def __init__(
         self,
         amount: int,
@@ -42,7 +43,7 @@ class BatchHandlerData(typing.Generic[I, O]):
         accuracy: float | None,
         input: I,
         output: O,
-        target: torch.Tensor,
+        target: TG,
     ):
         self.amount = amount
         self.loss = loss
@@ -51,8 +52,8 @@ class BatchHandlerData(typing.Generic[I, O]):
         self.output = output
         self.target = target
 
-class MetricsHandlerInput(BatchHandlerData[I, O], typing.Generic[I, O]):
-    def __init__(self, out: BatchHandlerData[I, O], time_diff: int):
+class MetricsHandlerInput(BatchHandlerData[I, O, TG], typing.Generic[I, O, TG]):
+    def __init__(self, out: BatchHandlerData[I, O, TG], time_diff: int):
         super().__init__(
             amount=out.amount,
             loss=out.loss,
@@ -63,15 +64,18 @@ class MetricsHandlerInput(BatchHandlerData[I, O], typing.Generic[I, O]):
 
         self.time_diff = time_diff
 
-class MetricsHandler(typing.Generic[I, O, MT]):
-    def define(self, data: MetricsHandlerInput[I, O]) -> MT:
+class MetricsHandler(typing.Generic[I, O, TG, MT]):
+    def define(self, data: MetricsHandlerInput[I, O, TG]) -> MT:
         raise NotImplementedError
 
     def add(self, current: MT | None, metrics: MT) -> MT:
         raise NotImplementedError
 
-class TensorMetricsHandler(MetricsHandler[torch.Tensor, torch.Tensor, MT], typing.Generic[MT]):
-    def define(self, data: MetricsHandlerInput[torch.Tensor, torch.Tensor]) -> MT:
+class TensorMetricsHandler(
+    MetricsHandler[torch.Tensor, torch.Tensor, torch.Tensor, MT],
+    typing.Generic[MT],
+):
+    def define(self, data: MetricsHandlerInput[torch.Tensor, torch.Tensor, torch.Tensor]) -> MT:
         raise NotImplementedError
 
     def add(self, current: MT | None, metrics: MT) -> MT:
@@ -94,7 +98,7 @@ class BatchHandler():
     def __init__(
         self,
         cursor: ExecutionCursor | None,
-        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any] | None,
+        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any, typing.Any] | None,
         best_accuracy: float | None,
     ):
         self.amount = cursor.amount if cursor else 0
@@ -150,7 +154,10 @@ class BatchHandler():
     def run(
         self,
         dataloader: typing.Iterable[I],
-        fn: typing.Callable[[BatchHandlerRunParams[I]], BatchHandlerData[typing.Any, typing.Any]],
+        fn: typing.Callable[
+            [BatchHandlerRunParams[I]],
+            BatchHandlerData[typing.Any, typing.Any, typing.Any]
+        ],
         epoch: int,
         random_seed: int | None,
     ) -> BatchHandlerResult:
@@ -172,7 +179,7 @@ class BatchHandler():
         current_amount = 0
         batch_metrics: typing.Any | None = None
         start_time = time.time()
-        out: BatchHandlerData[I, typing.Any] | None = None
+        out: BatchHandlerData[I, typing.Any, typing.Any] | None = None
 
         metrics_handler = self.metrics_handler
 
@@ -285,7 +292,7 @@ class GeneralBatchHandler(BatchHandler):
         print_prefix: str,
         get_batch_info: typing.Callable[[TrainBatchInfo[typing.Any]], str],
         save_state: typing.Callable[[], None],
-        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any] | None,
+        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any, typing.Any] | None,
         early_stopper: EarlyStopper | None = None,
         validation: bool = False,
         test: bool = False,
@@ -503,7 +510,7 @@ class TrainBatchHandler(GeneralBatchHandler, typing.Generic[ATR]):
         results: TrainResult,
         get_batch_info: typing.Callable[[TrainBatchInfo[typing.Any]], str],
         save_state: typing.Callable[[TrainResult], None],
-        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any] | None,
+        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any, typing.Any] | None,
         early_stopper: EarlyStopper | None = None,
     ):
         def get_results() -> GeneralBatchHandlerResults:
@@ -643,7 +650,7 @@ class TestBatchHandler(GeneralBatchHandler, typing.Generic[ATE]):
         results: TestResult,
         get_batch_info: typing.Callable[[TrainBatchInfo[typing.Any]], str],
         save_state: typing.Callable[[TestResult], None],
-        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any] | None,
+        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any, typing.Any] | None,
         early_stopper: EarlyStopper | None = None,
     ):
         def get_results() -> GeneralBatchHandlerResults:

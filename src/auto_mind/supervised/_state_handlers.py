@@ -10,9 +10,9 @@ from auto_mind.supervised._action_data import (
 S = typing.TypeVar("S", bound=BaseResult)
 PE = typing.TypeVar("PE", bound=MinimalEvalParams)
 ATR = typing.TypeVar("ATR", bound=TrainParams[
-    typing.Any, typing.Any, typing.Any])
+    typing.Any, typing.Any, typing.Any, typing.Any])
 ATE = typing.TypeVar("ATE", bound=TestParams[
-    typing.Any, typing.Any, typing.Any])
+    typing.Any, typing.Any, typing.Any, typing.Any])
 
 class StateHandler(typing.Generic[ATR, ATE]):
     def __init__(self, use_best: bool):

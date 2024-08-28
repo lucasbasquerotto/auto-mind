@@ -16,10 +16,11 @@ from auto_mind.supervised._action_handlers import (
 from auto_mind.supervised._batch_handlers import MetricsHandler
 from auto_mind.supervised._action import GeneralAction
 
-I = typing.TypeVar("I")
+I = typing.TypeVar("I", bound=typing.Sized)
 O = typing.TypeVar("O")
 T = typing.TypeVar("T")
-M = typing.TypeVar("M")
+TG = typing.TypeVar("TG", bound=typing.Sized)
+MT = typing.TypeVar("MT")
 EI = typing.TypeVar("EI")
 EO = typing.TypeVar("EO")
 DI = typing.TypeVar("DI")
@@ -29,12 +30,12 @@ DO = typing.TypeVar("DO")
 #################### Parameters ####################
 ####################################################
 
-class ManagerDataParams(typing.Generic[I]):
+class ManagerDataParams(typing.Generic[I, TG]):
     def __init__(
         self,
-        train_dataloader: DataLoader[tuple[I, torch.Tensor]],
-        validation_dataloader: DataLoader[tuple[I, torch.Tensor]] | None,
-        test_dataloader: DataLoader[tuple[I, torch.Tensor]] | None,
+        train_dataloader: DataLoader[tuple[I, TG]],
+        validation_dataloader: DataLoader[tuple[I, TG]] | None,
+        test_dataloader: DataLoader[tuple[I, TG]] | None,
     ):
         self.train_dataloader = train_dataloader
         self.validation_dataloader = validation_dataloader
@@ -43,7 +44,7 @@ class ManagerDataParams(typing.Generic[I]):
     @classmethod
     def from_datasets(
         cls,
-        datasets: DatasetGroup[tuple[I, torch.Tensor]],
+        datasets: DatasetGroup[typing.Any],
         batch_size: int = 64,
         limit: int | None = None,
     ) -> typing.Self:
@@ -69,11 +70,11 @@ class ManagerDataParams(typing.Generic[I]):
             validation_dataloader=validation_dataloader,
             test_dataloader=test_dataloader)
 
-class ManagerModelParams(typing.Generic[I, O]):
+class ManagerModelParams(typing.Generic[I, O, TG]):
     def __init__(
         self,
         model: nn.Module,
-        criterion: nn.Module | typing.Callable[[BatchInOutParams[I, O]], torch.Tensor],
+        criterion: nn.Module | typing.Callable[[BatchInOutParams[I, O, TG]], torch.Tensor],
         executor: BatchExecutor[I, O],
         use_best: bool = False,
         clip_grad_max: float | None = None,
@@ -84,20 +85,20 @@ class ManagerModelParams(typing.Generic[I, O]):
         self.use_best = use_best
         self.clip_grad_max = clip_grad_max
 
-class ManagerMetricsParams(typing.Generic[I, O, M, EI, EO]):
+class ManagerMetricsParams(typing.Generic[I, O, TG, MT, EI, EO]):
     def __init__(
         self,
         evaluator: Evaluator[EI, EO] | None = None,
-        accuracy_calculator: BatchAccuracyCalculator[I, O] | None = None,
+        accuracy_calculator: BatchAccuracyCalculator[I, O, TG] | None = None,
         metrics_calculator: MetricsCalculator | None = None,
         batch_interval: bool = False,
         default_interval: int | None = 1,
         save_every: int | None = None,
         print_every: int | None = None,
         metric_every: int | None = None,
-        get_epoch_info: typing.Callable[[TrainEpochInfo[M]], str] | None = None,
-        get_batch_info: typing.Callable[[TrainBatchInfo[M]], str] | None = None,
-        train_metrics_handler: MetricsHandler[I, O, M] | None = None,
+        get_epoch_info: typing.Callable[[TrainEpochInfo[MT]], str] | None = None,
+        get_batch_info: typing.Callable[[TrainBatchInfo[MT]], str] | None = None,
+        train_metrics_handler: MetricsHandler[I, O, TG, MT] | None = None,
     ) -> None:
         self.evaluator = evaluator
         self.accuracy_calculator = accuracy_calculator
@@ -126,15 +127,15 @@ class ManagerOptimizerParams:
         self.scheduler = scheduler
         self.step_only_on_accuracy_loss = step_only_on_accuracy_loss
 
-class ManagerConfig(typing.Generic[I, O]):
+class ManagerConfig(typing.Generic[I, O, TG]):
     def __init__(
         self,
         save_path: str | None = None,
         random_seed: int | None = None,
         device: torch.device | None = None,
-        train_hook: Callable[[GeneralHookParams[I, O]], None] | None = None,
-        validation_hook: Callable[[GeneralHookParams[I, O]], None] | None = None,
-        test_hook: Callable[[GeneralHookParams[I, O]], None] | None = None,
+        train_hook: Callable[[GeneralHookParams[I, O, TG]], None] | None = None,
+        validation_hook: Callable[[GeneralHookParams[I, O, TG]], None] | None = None,
+        test_hook: Callable[[GeneralHookParams[I, O, TG]], None] | None = None,
     ):
         self.save_path = save_path
         self.random_seed = random_seed
@@ -160,14 +161,14 @@ class ManagerTrainResult:
 ##################### Manager ######################
 ####################################################
 
-class Manager(typing.Generic[I, O, M, EI, EO]):
+class Manager(typing.Generic[I, O, TG, MT, EI, EO]):
     def __init__(
         self,
-        data_params: ManagerDataParams[I],
-        model_params: ManagerModelParams[I, O],
+        data_params: ManagerDataParams[I, TG],
+        model_params: ManagerModelParams[I, O, TG],
         optimizer_params: ManagerOptimizerParams,
-        metrics_params: ManagerMetricsParams[I, O, M, EI, EO],
-        config: ManagerConfig[I, O],
+        metrics_params: ManagerMetricsParams[I, O, TG, MT, EI, EO],
+        config: ManagerConfig[I, O, TG],
     ):
         train_dataloader = data_params.train_dataloader
         validation_dataloader = data_params.validation_dataloader
@@ -210,7 +211,7 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
 
         model.to(device)
 
-        action: GeneralAction[I, O, M] = GeneralAction(
+        action: GeneralAction[I, O, TG, MT] = GeneralAction(
             random_seed=random_seed,
             use_best=use_best,
             executor=executor,
@@ -414,14 +415,23 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
             self.action.load_eval_state(params)
         return model
 
-class DefaultManager(Manager[torch.Tensor, torch.Tensor, None, EI, EO], typing.Generic[EI, EO]):
+class DefaultManager(
+    Manager[torch.Tensor, torch.Tensor, torch.Tensor, None, EI, EO],
+    typing.Generic[EI, EO],
+):
     def __init__(
         self,
-        data_params: ManagerDataParams[torch.Tensor],
-        model_params: ManagerModelParams[torch.Tensor, torch.Tensor],
+        data_params: ManagerDataParams[torch.Tensor, torch.Tensor],
+        model_params: ManagerModelParams[torch.Tensor, torch.Tensor, torch.Tensor],
         optimizer_params: ManagerOptimizerParams,
-        metrics_params: ManagerMetricsParams[torch.Tensor, torch.Tensor, None, EI, EO],
-        config: ManagerConfig[torch.Tensor, torch.Tensor],
+        metrics_params: ManagerMetricsParams[
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            None,
+            EI,
+            EO],
+        config: ManagerConfig[torch.Tensor, torch.Tensor, torch.Tensor],
     ):
         super().__init__(
             data_params=data_params,

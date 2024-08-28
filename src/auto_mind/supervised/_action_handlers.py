@@ -7,10 +7,11 @@ from auto_mind.supervised._action_data import (
     GeneralEvalBaseResult, GeneralEvalResult, BatchInOutParams,
     StateWithMetrics, EarlyStopper, TrainEarlyStopper)
 
-I = typing.TypeVar('I')
+I = typing.TypeVar("I", bound=typing.Sized)
 O = typing.TypeVar('O')
 T = typing.TypeVar('T')
 P = typing.TypeVar('P')
+TG = typing.TypeVar("TG", bound=typing.Sized)
 MT = typing.TypeVar('MT')
 EI = typing.TypeVar("EI")
 EO = typing.TypeVar("EO")
@@ -121,22 +122,25 @@ class GeneralBatchExecutor(BatchExecutor[Tensor, Tensor]):
         result: Tensor = params.model(params.input)
         return result
 
-class BatchAccuracyParams(BatchInOutParams[I, O], typing.Generic[I, O]):
+class BatchAccuracyParams(BatchInOutParams[I, O, TG], typing.Generic[I, O, TG]):
     pass
 
-class BatchAccuracyCalculator(typing.Generic[I, O]):
-    def run(self, params: BatchAccuracyParams[I, O]) -> float:
+class BatchAccuracyCalculator(typing.Generic[I, O, TG]):
+    def run(self, params: BatchAccuracyParams[I, O, TG]) -> float:
         raise NotImplementedError
 
-class GeneralBatchAccuracyCalculator(BatchAccuracyCalculator[I, torch.Tensor], typing.Generic[I]):
-    def run(self, params: BatchAccuracyParams[I, torch.Tensor]) -> float:
+class GeneralBatchAccuracyCalculator(
+    BatchAccuracyCalculator[I, torch.Tensor, torch.Tensor],
+    typing.Generic[I],
+):
+    def run(self, params: BatchAccuracyParams[I, torch.Tensor, torch.Tensor]) -> float:
         return (params.output.argmax(dim=1) == params.target).sum().item() / params.target.shape[0]
 
 class MultiLabelBatchAccuracyCalculator(
-    BatchAccuracyCalculator[I, torch.Tensor],
+    BatchAccuracyCalculator[I, torch.Tensor, torch.Tensor],
     typing.Generic[I],
 ):
-    def run(self, params: BatchAccuracyParams[I, torch.Tensor]) -> float:
+    def run(self, params: BatchAccuracyParams[I, torch.Tensor, torch.Tensor]) -> float:
         # params.output shape: [batch, classes]
         # params.target shape: [batch, classes]
         # for each item compare how close they are, with value 1 if they are the same,
@@ -148,7 +152,10 @@ class MultiLabelBatchAccuracyCalculator(
         result: float = grouped.sum().item() / grouped.shape[0]
         return result
 
-class ValueBatchAccuracyCalculator(BatchAccuracyCalculator[I, torch.Tensor], typing.Generic[I]):
+class ValueBatchAccuracyCalculator(
+    BatchAccuracyCalculator[I, torch.Tensor, torch.Tensor],
+    typing.Generic[I],
+):
     """
     Calculates the accuracy of the output values in relation to the targets for continuous values.
 
@@ -172,7 +179,7 @@ class ValueBatchAccuracyCalculator(BatchAccuracyCalculator[I, torch.Tensor], typ
         self.error_margin = error_margin
         self.epsilon = epsilon
 
-    def run(self, params: BatchAccuracyParams[I, torch.Tensor]) -> float:
+    def run(self, params: BatchAccuracyParams[I, torch.Tensor, torch.Tensor]) -> float:
         range_tensor = self.error_margin*params.target.abs() + self.epsilon
 
         # calculate the absolute difference between output and target
