@@ -1,4 +1,4 @@
-from ._action import (
+from ._action_data import (
     Scheduler,
     EarlyStopper,
     TrainEarlyStopper,
@@ -7,14 +7,14 @@ from ._action import (
     OptimizerChain,
     BatchInOutParams,
 )
-from ._action_impl import (
+from ._action import (
     MetricsHandlerInput,
     MetricsHandler,
     TensorMetricsHandler,
     default_batch_info,
     default_epoch_info,
 )
-from ._general_action import (
+from ._action_handlers import (
     BatchExecutorParams,
     BatchExecutor,
     GeneralBatchExecutor,

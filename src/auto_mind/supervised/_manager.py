@@ -6,15 +6,15 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from auto_mind.supervised._dataset import DatasetGroup
-from auto_mind.supervised._action import (
+from auto_mind.supervised._action_data import (
     Scheduler, EarlyStopper, SingleModelMinimalEvalParams, TrainEpochInfo,
     TrainBatchInfo, TrainResult, TestResult, BatchInOutParams)
-from auto_mind.supervised._action_impl import MetricsHandler
-from auto_mind.supervised._general_action import (
-    GeneralActionImpl, GeneralHookParams, GeneralTestParams,
+from auto_mind.supervised._action_handlers import (
+    GeneralHookParams, GeneralTestParams,
     GeneralTrainParams, BatchAccuracyCalculator, BatchExecutor,
     Evaluator, EvaluatorParams, MetricsCalculatorInputParams,
-    MetricsCalculator,)
+    MetricsCalculator)
+from auto_mind.supervised._action import MetricsHandler, GeneralAction
 
 I = typing.TypeVar("I")
 O = typing.TypeVar("O")
@@ -210,7 +210,7 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
 
         model.to(device)
 
-        action: GeneralActionImpl[I, O, M] = GeneralActionImpl(
+        action: GeneralAction[I, O, M] = GeneralAction(
             random_seed=random_seed,
             use_best=use_best,
             executor=executor,

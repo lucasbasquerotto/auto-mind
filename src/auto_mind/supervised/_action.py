@@ -1,951 +1,1670 @@
 # ruff: noqa: E741 (ambiguous variable name)
-from typing import Any, Dict, Generic, Protocol, TypeVar
+# pylint: disable=too-many-lines
+import time
+import math
 import typing
 import torch
-from torch import nn, optim
+import torch.nn as nn
+from torch import optim
 from torch.utils.data import DataLoader
+from auto_mind.supervised._action_data import (
+    BaseResult, TestResult, TrainResult, ExecutionCursor, EarlyStopper,
+    TrainEarlyStopper, TrainEpochInfo, TrainBatchInfo, MinimalTrainParams,
+    MinimalTestParams, MinimalFullState, Scheduler, BatchInOutParams,
+    SingleModelMinimalEvalParams)
+from auto_mind.supervised._action_handlers import (
+    AbortedException, StateHandler, BatchExecutor, BatchAccuracyCalculator,
+    MetricsCalculator, SingleModelStateHandler, GeneralTrainParams,
+    GeneralTestParams, MetricsCalculatorInputParams,
+    MetricsCalculatorParams, GeneralHookParams,
+    BatchExecutorParams, BatchAccuracyParams)
+
+I = typing.TypeVar("I")
+O = typing.TypeVar("O")
+T = typing.TypeVar('T')
+M = typing.TypeVar("M", bound=nn.Module)
+OT = typing.TypeVar("OT", bound=optim.Optimizer)
+RV = typing.TypeVar("RV", bound=BaseResult)
+MT = typing.TypeVar("MT")
+
+S = typing.TypeVar("S", bound=BaseResult)
+
+INF = typing.TypeVar("INF")
+ATR = typing.TypeVar(
+    "ATR",
+    bound=MinimalTrainParams[typing.Any, typing.Any, typing.Any, typing.Any])
+ATE = typing.TypeVar("ATE", bound=MinimalTestParams[typing.Any])
+STR = typing.TypeVar("STR", bound=MinimalFullState)
+STE = typing.TypeVar("STE", bound=MinimalFullState)
+
+AWP = typing.TypeVar("AWP")
+AWS = typing.TypeVar("AWS")
 
 ####################################################
-############### Protocols and Types ################
+################## Batch Handlers ##################
 ####################################################
 
-M = typing.TypeVar("M")
+class BatchHandlerRunParams(typing.Generic[I]):
+    def __init__(self, data: I, batch: int, amount: int):
+        self.data = data
+        self.batch = batch
+        self.amount = amount
 
-class Scheduler(Protocol):
-    def step(self, epoch: int | None = None) -> None:
-        ...
-
-    def state_dict(self) -> dict[str, Any]:
-        ...
-
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
-        ...
-
-class EarlyStopper:
-    def check(self) -> bool:
-        return False
-
-    def state_dict(self) -> dict[str, Any]:
-        return dict()
-
-    def load_state_dict(
-        self,
-        state_dict: dict[str, Any], # pylint: disable=unused-argument
-    ) -> typing.Self:
-        return self
-
-class TrainEarlyStopper(EarlyStopper, typing.Generic[M]):
-    def check(self) -> bool:
-        return self.check_finish()
-
-    def check_finish(self) -> bool:
-        return False
-
-    def update_epoch(self, loss: float, accuracy: float | None, metrics: M | None) -> None:
-        pass
-
-class ChainedEarlyStopper(TrainEarlyStopper[M], typing.Generic[M]):
-    def __init__(self, stoppers: list[EarlyStopper]):
-        self.stoppers = stoppers
-
-    def check(self) -> bool:
-        if self.check_finish():
-            return True
-        return any(stopper.check() for stopper in self.stoppers)
-
-    def check_finish(self) -> bool:
-        return (
-            any(stopper.check_finish()
-            for stopper in self.stoppers
-            if isinstance(stopper, TrainEarlyStopper)))
-
-    def update_epoch(self, loss: float, accuracy: float | None, metrics: M | None) -> None:
-        for stopper in self.stoppers:
-            if isinstance(stopper, TrainEarlyStopper):
-                stopper.update_epoch(loss=loss, accuracy=accuracy, metrics=metrics)
-
-    def state_dict(self) -> dict[str, Any]:
-        return dict(stoppers=[stopper.state_dict() for stopper in self.stoppers])
-
-    def load_state_dict(self, state_dict: dict[str, Any]) -> typing.Self:
-        for i, stopper in enumerate(self.stoppers):
-            stopper.load_state_dict(state_dict['stoppers'][i])
-        return self
-
-class AccuracyEarlyStopper(TrainEarlyStopper[M], typing.Generic[M]):
-    def __init__(self, min_accuracy: float, patience: int = 5):
-        self.patience = patience
-        self.min_accuracy = min_accuracy
-        self.amount = 0
-
-    def check_finish(self) -> bool:
-        return self.amount >= self.patience
-
-    def update_epoch(self, loss: float, accuracy: float | None, metrics: M | None) -> None:
-        if accuracy is None:
-            self.amount = 0
-        elif accuracy < self.min_accuracy:
-            self.amount = 0
-        else:
-            self.amount += 1
-
-    def state_dict(self) -> dict[str, Any]:
-        parent = super().state_dict()
-        return dict(amount=self.amount, parent=parent)
-
-    def load_state_dict(self, state_dict: dict[str, Any]) -> typing.Self:
-        self.amount = state_dict.get('amount', 0)
-        super().load_state_dict(state_dict.get('parent', {}))
-        return self
-
-class OptimizerChain(optim.Optimizer):
-    def __init__(self, optimizers: list[optim.Optimizer]) -> None:
-        super().__init__(params=[], defaults=dict())
-        self.optimizers: list[optim.Optimizer] = optimizers
-
-    def zero_grad(self, set_to_none: bool = True) -> None:
-        for optimizer in self.optimizers:
-            optimizer.zero_grad(set_to_none=set_to_none)
-
-    def step(self, closure=None) -> None: # type: ignore
-        for optimizer in self.optimizers:
-            optimizer.step()
-
-    def state_dict(self) -> dict[str, Any]:
-        return {
-            f'optimizer_{i}': optimizer.state_dict()
-            for i, optimizer in enumerate(self.optimizers)
-        }
-
-    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
-        for i, optimizer in enumerate(self.optimizers):
-            optimizer.load_state_dict(state_dict[f'optimizer_{i}'])
-
-####################################################
-################# General Results ##################
-####################################################
-
-class BaseResult():
-    def state_dict(self) -> dict[str, Any]:
-        return dict()
-
-class ExecutionCursor(BaseResult):
+class BatchHandlerData(typing.Generic[I, O]):
     def __init__(
         self,
         amount: int,
-        total_loss: float,
-        total_accuracy: float | None,
-        total_time: int,
-        total_metrics: Any | None,
-    ):
-        self.amount = amount
-        self.total_loss = total_loss
-        self.total_accuracy = total_accuracy
-        self.total_time = total_time
-        self.total_metrics = total_metrics
-
-    def state_dict(self) -> dict[str, Any]:
-        return dict(
-            amount=self.amount,
-            total_loss=self.total_loss,
-            total_accuracy=self.total_accuracy,
-            total_time=self.total_time,
-            total_metrics=self.total_metrics,
-        )
-
-    @staticmethod
-    def from_state_dict(state_props: dict[str, Any]) -> 'ExecutionCursor':
-        return ExecutionCursor(
-            amount=state_props['amount'],
-            total_loss=state_props['total_loss'],
-            total_accuracy=state_props['total_accuracy'],
-            total_time=state_props['total_time'],
-            total_metrics=state_props['total_metrics'],
-        )
-
-class TrainResult(BaseResult):
-    def __init__(
-        self,
-        epoch: int,
-        early_stopped: bool,
-        early_stopped_max_epochs: int,
-        train_batch: int,
-        train_total_batch: int | None,
-        val_batch: int,
-        val_total_batch: int | None,
-        last_loss: float,
-        last_accuracy: float | None,
-        last_metrics: Any | None,
-        last_train_loss: float,
-        last_train_accuracy: float | None,
-        last_train_metrics: Any | None,
-        last_val_loss: float,
-        last_val_accuracy: float | None,
-        last_val_metrics: Any | None,
-        best_epoch: int,
-        best_accuracy: float | None,
-        best_train_accuracy: float | None,
-        best_val_accuracy: float | None,
-        total_train_time: int,
-        total_val_time: int,
-        accuracies: list[tuple[int, float]],
-        losses: list[tuple[int, float]],
-        times: list[tuple[int, float]],
-        metrics: list[tuple[int, Any]] | None = None,
-        val_accuracies: list[tuple[int, float]] | None = None,
-        val_losses: list[tuple[int, float]] | None = None,
-        val_times: list[tuple[int, float]] | None = None,
-        val_metrics: list[tuple[int, Any]] | None = None,
-        last_epoch_accuracies: list[tuple[int, float]] | None = None,
-        last_epoch_losses: list[tuple[int, float]] | None = None,
-        last_epoch_times: list[tuple[int, int]] | None = None,
-        last_epoch_metrics: list[tuple[int, Any]] | None = None,
-        last_epoch_val_accuracies: list[tuple[int, float]] | None = None,
-        last_epoch_val_losses: list[tuple[int, float]] | None = None,
-        last_epoch_val_times: list[tuple[int, int]] | None = None,
-        last_epoch_val_metrics: list[tuple[int, Any]] | None = None,
-        epoch_cursor: ExecutionCursor | None = None,
-        batch_train_cursor: ExecutionCursor | None = None,
-        batch_val_cursor: ExecutionCursor | None = None,
-    ):
-        self.epoch = epoch
-        self.early_stopped = early_stopped
-        self.early_stopped_max_epochs = early_stopped_max_epochs
-        self.train_batch = train_batch
-        self.train_total_batch = train_total_batch
-        self.val_batch = val_batch
-        self.val_total_batch = val_total_batch
-        self.last_train_loss = last_train_loss
-        self.last_train_accuracy = last_train_accuracy
-        self.last_train_metrics = last_train_metrics
-        self.last_val_loss = last_val_loss
-        self.last_val_accuracy = last_val_accuracy
-        self.last_val_metrics = last_val_metrics
-        self.last_loss = last_loss
-        self.last_accuracy = last_accuracy
-        self.last_metrics = last_metrics
-        self.best_epoch = best_epoch
-        self.best_accuracy = best_accuracy
-        self.best_train_accuracy = best_train_accuracy
-        self.best_val_accuracy = best_val_accuracy
-        self.total_train_time = total_train_time
-        self.total_val_time = total_val_time
-        self.accuracies = accuracies
-        self.losses = losses
-        self.times = times
-        self.metrics = metrics
-        self.val_accuracies = val_accuracies
-        self.val_losses = val_losses
-        self.val_times = val_times
-        self.val_metrics = val_metrics
-        self.last_epoch_accuracies = last_epoch_accuracies
-        self.last_epoch_losses = last_epoch_losses
-        self.last_epoch_times = last_epoch_times
-        self.last_epoch_metrics = last_epoch_metrics
-        self.last_epoch_val_accuracies = last_epoch_val_accuracies
-        self.last_epoch_val_losses = last_epoch_val_losses
-        self.last_epoch_val_times = last_epoch_val_times
-        self.last_epoch_val_metrics = last_epoch_val_metrics
-        self.epoch_cursor = epoch_cursor
-        self.batch_train_cursor = batch_train_cursor
-        self.batch_val_cursor = batch_val_cursor
-
-    def state_dict(self) -> dict[str, Any]:
-        return dict(
-            epoch=self.epoch,
-            early_stopped=self.early_stopped,
-            early_stopped_max_epochs=self.early_stopped_max_epochs,
-            train_batch=self.train_batch,
-            train_total_batch=self.train_total_batch,
-            val_batch=self.val_batch,
-            val_total_batch=self.val_total_batch,
-            last_train_loss=self.last_train_loss,
-            last_train_accuracy=self.last_train_accuracy,
-            last_train_metrics=self.last_train_metrics,
-            last_val_loss=self.last_val_loss,
-            last_val_accuracy=self.last_val_accuracy,
-            last_val_metrics=self.last_val_metrics,
-            last_loss=self.last_loss,
-            last_accuracy=self.last_accuracy,
-            last_metrics=self.last_metrics,
-            best_epoch=self.best_epoch,
-            best_accuracy=self.best_accuracy,
-            best_train_accuracy=self.best_train_accuracy,
-            best_val_accuracy=self.best_val_accuracy,
-            total_train_time=self.total_train_time,
-            total_val_time=self.total_val_time,
-            accuracies=self.accuracies,
-            losses=self.losses,
-            times=self.times,
-            metrics=self.metrics,
-            val_accuracies=self.val_accuracies,
-            val_losses=self.val_losses,
-            val_times=self.val_times,
-            val_metrics=self.val_metrics,
-            last_epoch_accuracies=self.last_epoch_accuracies,
-            last_epoch_losses=self.last_epoch_losses,
-            last_epoch_times=self.last_epoch_times,
-            last_epoch_metrics=self.last_epoch_metrics,
-            last_epoch_val_accuracies=self.last_epoch_val_accuracies,
-            last_epoch_val_losses=self.last_epoch_val_losses,
-            last_epoch_val_times=self.last_epoch_val_times,
-            last_epoch_val_metrics=self.last_epoch_val_metrics,
-            epoch_cursor=self.epoch_cursor.state_dict() if self.epoch_cursor else None,
-            batch_train_cursor=(
-                self.batch_train_cursor.state_dict()
-                if self.batch_train_cursor
-                else None),
-            batch_val_cursor=self.batch_val_cursor.state_dict() if self.batch_val_cursor else None,
-        )
-
-    @staticmethod
-    def from_state_dict(state_props: dict[str, Any]) -> 'TrainResult':
-        epoch_cursor_value = state_props.get('epoch_cursor')
-        epoch_cursor = ExecutionCursor.from_state_dict(
-            epoch_cursor_value
-        ) if epoch_cursor_value else None
-
-        batch_train_cursor_value = state_props.get('batch_train_cursor')
-        batch_train_cursor = ExecutionCursor.from_state_dict(
-            batch_train_cursor_value
-        ) if batch_train_cursor_value else None
-
-        batch_val_cursor_value = state_props.get('batch_val_cursor')
-        batch_val_cursor = ExecutionCursor.from_state_dict(
-            batch_val_cursor_value
-        ) if batch_val_cursor_value else None
-
-        return TrainResult(
-            epoch=state_props['epoch'],
-            early_stopped=state_props['early_stopped'],
-            early_stopped_max_epochs=state_props['early_stopped_max_epochs'],
-            train_batch=state_props['train_batch'],
-            train_total_batch=state_props['train_total_batch'],
-            val_batch=state_props['val_batch'],
-            val_total_batch=state_props['val_total_batch'],
-            last_train_loss=state_props['last_train_loss'],
-            last_train_accuracy=state_props['last_train_accuracy'],
-            last_train_metrics=state_props['last_train_metrics'],
-            last_val_loss=state_props['last_val_loss'],
-            last_val_accuracy=state_props['last_val_accuracy'],
-            last_val_metrics=state_props['last_val_metrics'],
-            last_loss=state_props['last_loss'],
-            last_accuracy=state_props['last_accuracy'],
-            last_metrics=state_props['last_metrics'],
-            best_epoch=state_props['best_epoch'],
-            best_accuracy=state_props['best_accuracy'],
-            best_train_accuracy=state_props['best_train_accuracy'],
-            best_val_accuracy=state_props['best_val_accuracy'],
-            total_train_time=state_props['total_train_time'],
-            total_val_time=state_props['total_val_time'],
-            accuracies=state_props['accuracies'],
-            losses=state_props['losses'],
-            times=state_props['times'],
-            metrics=state_props['metrics'],
-            val_accuracies=state_props['val_accuracies'],
-            val_losses=state_props['val_losses'],
-            val_times=state_props['val_times'],
-            val_metrics=state_props['val_metrics'],
-            last_epoch_accuracies=state_props['last_epoch_accuracies'],
-            last_epoch_losses=state_props['last_epoch_losses'],
-            last_epoch_times=state_props['last_epoch_times'],
-            last_epoch_metrics=state_props['last_epoch_metrics'],
-            last_epoch_val_accuracies=state_props['last_epoch_val_accuracies'],
-            last_epoch_val_losses=state_props['last_epoch_val_losses'],
-            last_epoch_val_times=state_props['last_epoch_val_times'],
-            last_epoch_val_metrics=state_props['last_epoch_val_metrics'],
-            epoch_cursor=epoch_cursor,
-            batch_train_cursor=batch_train_cursor,
-            batch_val_cursor=batch_val_cursor)
-
-class TestResult(BaseResult):
-    def __init__(
-        self,
-        epoch: int,
-        batch: int,
-        total_batch: int | None,
-        accuracy: float | None,
         loss: float,
-        total_time: int,
-        last_epoch_accuracies: list[tuple[int, float]] | None = None,
-        last_epoch_losses: list[tuple[int, float]] | None = None,
-        last_epoch_times: list[tuple[int, int]] | None = None,
-        last_epoch_metrics: list[tuple[int, Any]] | None = None,
-        batch_cursor: ExecutionCursor | None = None,
-    ):
-        self.epoch = epoch
-        self.batch = batch
-        self.total_batch = total_batch
-        self.accuracy = accuracy
-        self.loss = loss
-        self.total_time = total_time
-        self.last_epoch_accuracies = last_epoch_accuracies
-        self.last_epoch_losses = last_epoch_losses
-        self.last_epoch_times = last_epoch_times
-        self.last_epoch_metrics = last_epoch_metrics
-        self.batch_cursor = batch_cursor
-
-    def state_dict(self) -> dict[str, Any]:
-        return dict(
-            epoch=self.epoch,
-            batch=self.batch,
-            total_batch=self.total_batch,
-            accuracy=self.accuracy,
-            loss=self.loss,
-            total_time=self.total_time,
-            last_epoch_accuracies=self.last_epoch_accuracies,
-            last_epoch_losses=self.last_epoch_losses,
-            last_epoch_times=self.last_epoch_times,
-            last_epoch_metrics=self.last_epoch_metrics,
-            batch_cursor=self.batch_cursor.state_dict() if self.batch_cursor else None,
-        )
-
-    @staticmethod
-    def from_state_dict(state_props: dict[str, Any]) -> 'TestResult':
-        batch_cursor_value = state_props.get('batch_cursor')
-        batch_cursor = ExecutionCursor.from_state_dict(
-            batch_cursor_value
-        ) if batch_cursor_value else None
-
-        return TestResult(
-            epoch=state_props['epoch'],
-            batch=state_props['batch'],
-            total_batch=state_props['total_batch'],
-            accuracy=state_props['accuracy'],
-            loss=state_props['loss'],
-            total_time=state_props['total_time'],
-            last_epoch_accuracies=state_props['last_epoch_accuracies'],
-            last_epoch_losses=state_props['last_epoch_losses'],
-            last_epoch_times=state_props['last_epoch_times'],
-            batch_cursor=batch_cursor,
-        )
-
-####################################################
-################## General States ##################
-####################################################
-
-OT = typing.TypeVar("OT", bound=optim.Optimizer)
-
-class MinimalFullState(BaseResult):
-    def __init__(
-            self,
-            train_results: TrainResult,
-            test_results: TestResult | None):
-        self.train_results = train_results
-        self.test_results = test_results
-
-    def state_dict(self) -> dict[str, Any]:
-        return dict(
-            train_results=self.train_results.state_dict(),
-            test_results=self.test_results.state_dict() if self.test_results else None)
-
-    @staticmethod
-    def from_minimal_state_dict(state_dict: dict[str, Any]) -> 'MinimalFullState':
-        train_results = TrainResult.from_state_dict(
-            state_dict['train_results'])
-        test_results = TestResult.from_state_dict(
-            state_dict['test_results']) if state_dict['test_results'] else None
-
-        return MinimalFullState(
-            train_results=train_results,
-            test_results=test_results)
-
-class ModelMainState(typing.Generic[OT]):
-    def __init__(
-        self,
-        model: nn.Module,
-        optimizer: OT,
-        scheduler: Scheduler | None = None,
-        early_stopper: EarlyStopper | None = None,
-    ):
-        self.model = model
-        self.optimizer = optimizer
-        self.scheduler = scheduler
-        self.early_stopper = early_stopper
-
-    def state_dict(self) -> dict[str, Any]:
-        return dict(
-            model=self.model.state_dict(),
-            optimizer=self.optimizer.state_dict(),
-            scheduler=self.scheduler.state_dict() if self.scheduler else None,
-            early_stopper=self.early_stopper.state_dict() if self.early_stopper else None)
-
-class ModelFullState(typing.Generic[OT], MinimalFullState):
-    def __init__(
-            self,
-            model: nn.Module,
-            optimizer: OT,
-            best_state_dict: dict[str, Any] | None,
-            train_results: TrainResult,
-            test_results: TestResult | None):
-        super().__init__(
-            train_results=train_results,
-            test_results=test_results)
-        self.model = model
-        self.optimizer = optimizer
-        self.best_state_dict = best_state_dict
-
-    def state_dict(self) -> dict[str, Any]:
-        last_state_dict = ModelMainState(model=self.model, optimizer=self.optimizer).state_dict()
-        best_state_dict = self.best_state_dict
-
-        if (not best_state_dict) or (self.train_results.best_epoch == self.train_results.epoch):
-            best_state_dict = last_state_dict
-
-        return dict(
-            best=best_state_dict,
-            last=last_state_dict,
-            train_results=self.train_results.state_dict(),
-            test_results=self.test_results.state_dict() if self.test_results else None)
-
-    @staticmethod
-    def from_state_dict(
-        model: nn.Module,
-        optimizer: OT,
-        use_best: bool,
-        state_dict: dict[str, Any],
-    ) -> 'ModelFullState[OT]':
-        best_state_dict = state_dict['best']
-        last_state_dict = state_dict['last']
-        outer_state_dict = best_state_dict if use_best else last_state_dict
-
-        model.load_state_dict(outer_state_dict['model'])
-        optimizer.load_state_dict(outer_state_dict['optimizer'])
-
-        train_results = TrainResult.from_state_dict(
-            state_dict['train_results'])
-        test_results = TestResult.from_state_dict(
-            state_dict['test_results']) if state_dict['test_results'] else None
-
-        return ModelFullState(
-            model=model,
-            optimizer=optimizer,
-            best_state_dict=best_state_dict,
-            train_results=train_results,
-            test_results=test_results)
-
-####################################################
-################## General Params ##################
-####################################################
-
-class MinimalHookParams():
-    def __init__(
-            self,
-            current_amount: int,
-            loss: float,
-            accuracy: float | None):
-        self.current_amount = current_amount
-        self.loss = loss
-        self.accuracy = accuracy
-
-I = TypeVar("I")
-O = TypeVar("O")
-TRH = TypeVar("TRH", bound=MinimalHookParams)
-TEH = TypeVar("TEH", bound=MinimalHookParams)
-
-class MinimalEvalParams():
-    def __init__(
-        self,
-        save_path: str | None,
-        skip_load_state: bool
-    ):
-        self.save_path = save_path
-        self.skip_load_state = skip_load_state
-
-class TrainBatchInfo(typing.Generic[M]):
-    def __init__(
-        self,
-        loss: float | None,
         accuracy: float | None,
-        metrics: M | None,
-        count: int | None,
-        batch: int | None,
-        total_batch: int | None,
-        first: bool | None,
-        last: bool | None,
-        start: float | None,
-        prefix: str | None,
-        validation: bool | None,
-        test: bool | None
-    ):
-        self.loss = loss
-        self.accuracy = accuracy
-        self.metrics = metrics
-        self.count = count
-        self.batch = batch
-        self.total_batch = total_batch
-        self.first = first
-        self.last = last
-        self.start = start
-        self.prefix = prefix
-        self.validation = validation
-        self.test = test
-
-class TrainEpochInfo(typing.Generic[M]):
-    def __init__(
-        self,
-        epochs: int | None,
-        epoch: int | None,
-        start_epoch: int | None,
-        start: float | None,
-        loss: float | None,
-        val_loss: float | None,
-        accuracy: float | None,
-        val_accuracy: float | None,
-        metrics: M | None,
-        val_metrics: M | None,
-        count: int | None,
-        validate: bool,
-        batch_interval: bool | None,
-    ):
-        self.epochs = epochs
-        self.epoch = epoch
-        self.start_epoch = start_epoch
-        self.start = start
-        self.loss = loss
-        self.val_loss = val_loss
-        self.accuracy = accuracy
-        self.val_accuracy = val_accuracy
-        self.metrics = metrics
-        self.val_metrics = val_metrics
-        self.count = count
-        self.validate = validate
-        self.batch_interval = batch_interval
-
-class MinimalTestParams(MinimalEvalParams, typing.Generic[M]):
-    def __init__(
-            self,
-            save_every: int | None,
-            print_every: int | None,
-            metric_every: int | None,
-            early_stopper: EarlyStopper | None,
-            get_batch_info: typing.Callable[[TrainBatchInfo[M]], str] | None,
-            save_path: str | None,
-            skip_load_state: bool):
-
-        super().__init__(
-            save_path=save_path,
-            skip_load_state=skip_load_state)
-
-        self.save_every = save_every
-        self.print_every = print_every
-        self.metric_every = metric_every
-        self.early_stopper = early_stopper
-        self.get_batch_info = get_batch_info
-
-class MinimalTrainParams(MinimalEvalParams, Generic[I, TRH, TEH, M]):
-    def __init__(
-            self,
-            train_dataloader: DataLoader[I],
-            validation_dataloader: DataLoader[I] | None,
-            train_hook: typing.Callable[[TRH], None] | None,
-            validation_hook: typing.Callable[[TEH], None] | None,
-            epochs: int,
-            batch_interval: bool | None,
-            save_every: int | None,
-            print_every: int | None,
-            metric_every: int | None,
-            early_stopper: EarlyStopper | None,
-            save_path: str | None,
-            skip_load_state: bool,
-            get_epoch_info: typing.Callable[[TrainEpochInfo[M]], str] | None,
-            get_batch_info: typing.Callable[[TrainBatchInfo[M]], str] | None):
-
-        super().__init__(
-            save_path=save_path,
-            skip_load_state=skip_load_state)
-
-        self.train_dataloader = train_dataloader
-        self.validation_dataloader = validation_dataloader
-        self.train_hook = train_hook
-        self.validation_hook = validation_hook
-        self.epochs = epochs
-        self.batch_interval = batch_interval
-        self.save_every = save_every
-        self.print_every = print_every
-        self.metric_every = metric_every
-        self.early_stopper = early_stopper
-        self.get_epoch_info = get_epoch_info
-        self.get_batch_info = get_batch_info
-
-class BatchInOutParams(typing.Generic[I, O]):
-    def __init__(
-        self,
         input: I,
         full_output: O,
         output: torch.Tensor,
         target: torch.Tensor,
     ):
+        self.amount = amount
+        self.loss = loss
+        self.accuracy = accuracy
         self.input = input
         self.full_output = full_output
         self.output = output
         self.target = target
 
-class SingleModelTrainParams(
-    MinimalTrainParams[tuple[I, torch.Tensor], TRH, TEH, M],
-    Generic[I, O, TRH, TEH, M],
-):
+class BatchHandlerResult:
     def __init__(
         self,
-        train_dataloader: DataLoader[tuple[I, torch.Tensor]],
-        validation_dataloader: DataLoader[tuple[I, torch.Tensor]] | None,
-        model: nn.Module,
-        criterion: nn.Module | typing.Callable[[BatchInOutParams[I, O]], torch.Tensor],
-        optimizer: optim.Optimizer,
-        epochs: int,
-        batch_interval: bool,
-        save_every: int | None,
-        print_every: int | None,
-        metric_every: int | None,
-        scheduler: Scheduler | None = None,
-        step_only_on_accuracy_loss: bool = False,
-        clip_grad_max: float | None = None,
+        total_loss: float,
+        total_accuracy: float | None,
+        total_time: int,
+        total_metrics: typing.Any | None,
+    ):
+        self.total_loss = total_loss
+        self.total_accuracy = total_accuracy
+        self.total_time = total_time
+        self.total_metrics = total_metrics
+
+class MetricsHandlerInput(BatchHandlerData[I, O], typing.Generic[I, O]):
+    def __init__(self, out: BatchHandlerData[I, O], time_diff: int):
+        super().__init__(
+            amount=out.amount,
+            loss=out.loss,
+            accuracy=out.accuracy,
+            input=out.input,
+            full_output=out.full_output,
+            output=out.output,
+            target=out.target)
+
+        self.time_diff = time_diff
+
+class MetricsHandler(typing.Generic[I, O, MT]):
+    def define(self, data: MetricsHandlerInput[I, O]) -> MT:
+        raise NotImplementedError
+
+    def add(self, current: MT | None, metrics: MT) -> MT:
+        raise NotImplementedError
+
+class TensorMetricsHandler(MetricsHandler[torch.Tensor, torch.Tensor, MT], typing.Generic[MT]):
+    def define(self, data: MetricsHandlerInput[torch.Tensor, torch.Tensor]) -> MT:
+        raise NotImplementedError
+
+    def add(self, current: MT | None, metrics: MT) -> MT:
+        raise NotImplementedError
+
+class BatchHandler():
+    def __init__(
+        self,
+        cursor: ExecutionCursor | None,
+        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any] | None,
+        best_accuracy: float | None,
+    ):
+        self.amount = cursor.amount if cursor else 0
+        self.total_loss = cursor.total_loss if cursor else 0.0
+        self.total_accuracy = cursor.total_accuracy if cursor else 0.0
+        self.total_time: int = cursor.total_time if cursor else 0
+        self.total_metrics = cursor.total_metrics if cursor else None
+        self.metrics_handler = metrics_handler
+        self.best_accuracy = best_accuracy
+
+    def verify_early_stop(self) -> None:
+        """
+        Raises exception if the run should be aborted.
+        """
+
+    def skip(self, batch: int) -> bool: # pylint: disable=unused-argument
+        return True
+
+    def handle(
+        self,
+        batch: int,
+        total_batch: int | None,
+        amount: int,
+        last: bool,
+        loss: float,
+        accuracy: float | None,
+        time_diff: int,
+        batch_metrics: typing.Any | None,
+    ) -> None:
+        raise NotImplementedError()
+
+    def handle_main(
+        self,
+        amount: int,
+        loss: float,
+        accuracy: float | None,
+        time_diff: int,
+        batch_metrics: typing.Any | None,
+    ) -> None:
+        self.amount += amount
+        self.total_loss += loss
+
+        if accuracy is not None and self.total_accuracy is not None:
+            self.total_accuracy += accuracy * amount
+        else:
+            self.total_accuracy = None
+
+        self.total_time += time_diff
+
+        if self.metrics_handler and batch_metrics:
+            self.total_metrics = self.metrics_handler.add(self.total_metrics, batch_metrics)
+
+    def run(
+        self,
+        dataloader: typing.Iterable[I],
+        fn: typing.Callable[[BatchHandlerRunParams[I]], BatchHandlerData[typing.Any, typing.Any]],
+        epoch: int,
+        random_seed: int | None,
+    ) -> BatchHandlerResult:
+        self.verify_early_stop()
+
+        random_seed = (random_seed or 1) * (epoch + 1)
+        torch.manual_seed(random_seed)
+
+        def get_len(dataloader: typing.Iterable[I]) -> int | None:
+            if isinstance(dataloader, typing.Sized):
+                try:
+                    return len(dataloader)
+                except TypeError:
+                    return None
+            return None
+
+        batch = 0
+        total_batch = get_len(dataloader)
+        current_amount = 0
+        batch_metrics: typing.Any | None = None
+        start_time = time.time()
+        out: BatchHandlerData[I, typing.Any] | None = None
+
+        metrics_handler = self.metrics_handler
+
+        def handle(last: bool) -> None:
+            nonlocal start_time
+            nonlocal batch_metrics
+
+            assert out is not None
+
+            loss_value = out.loss
+            batch_accuracy = out.accuracy
+
+            end_time = time.time()
+            time_diff = _time_diff_millis(start_time, end_time)
+            start_time = end_time
+
+            if metrics_handler:
+                metrics_params = MetricsHandlerInput(
+                    out=out,
+                    time_diff=time_diff)
+                batch_metrics = metrics_handler.define(metrics_params)
+
+            with torch.no_grad():
+                self.handle(
+                    batch=batch,
+                    total_batch=total_batch,
+                    amount=current_amount,
+                    last=last,
+                    loss=loss_value,
+                    accuracy=batch_accuracy,
+                    time_diff=time_diff,
+                    batch_metrics=batch_metrics)
+
+        for data in dataloader:
+            if out is not None and batch > 0:
+                handle(last=False)
+
+            self.verify_early_stop()
+            batch += 1
+
+            if self.skip(batch):
+                continue
+
+            out = fn(BatchHandlerRunParams(
+                data=data,
+                batch=batch,
+                amount=self.amount))
+
+            current_amount = out.amount
+
+            if not current_amount:
+                break
+
+        amount = current_amount + self.amount
+
+        if not amount:
+            raise Exception('The dataloader is empty')
+
+        if out is not None:
+            handle(last=True)
+
+        total_loss = self.total_loss / self.amount
+        total_accuracy = (
+            (self.total_accuracy / self.amount)
+            if self.total_accuracy is not None
+            else None)
+
+        return BatchHandlerResult(
+            total_loss=total_loss,
+            total_accuracy=total_accuracy,
+            total_time=self.total_time,
+            total_metrics=self.total_metrics)
+
+class GeneralBatchHandlerParams:
+    def __init__(
+        self,
+        save_every: int | None = None,
+        print_every: int | None = None,
+        metric_every: int | None = None,
+    ):
+        self.save_every = save_every
+        self.print_every = print_every
+        self.metric_every = metric_every
+
+class GeneralBatchHandlerResults:
+    def __init__(
+        self,
+        batch: int,
+        total_batch: int | None,
+        cursor: ExecutionCursor | None,
+        last_epoch_accuracies: list[tuple[int, float]] | None,
+        last_epoch_losses: list[tuple[int, float]] | None,
+        last_epoch_times: list[tuple[int, int]] | None,
+        last_epoch_metrics: list[tuple[int, typing.Any]] | None,
+    ):
+        self.batch = batch
+        self.total_batch = total_batch
+        self.cursor = cursor
+        self.last_epoch_accuracies = last_epoch_accuracies
+        self.last_epoch_losses = last_epoch_losses
+        self.last_epoch_times = last_epoch_times
+        self.last_epoch_metrics = last_epoch_metrics
+
+def default_batch_info(info: TrainBatchInfo[typing.Any]) -> str:
+    print_loss = info.loss or 0
+    print_accuracy = info.accuracy
+    print_count = info.count or 1
+    batch = info.batch or 0
+    total_batch = info.total_batch
+    first = info.first
+    last = info.last
+    start = info.start or time.time()
+    print_prefix = info.prefix or ''
+    validation = info.validation
+    test = info.test
+
+    loss_avg = f'{(print_loss / print_count):.4f}'
+    loss_avg = f'[loss: {loss_avg}]'
+
+    if print_accuracy is not None:
+        acc_str = f'{100.0 * print_accuracy / print_count:>5.1f}%'
+        acc_str = f'[accuracy: {acc_str}]'
+    else:
+        acc_str = ''
+
+    batch_cap = 10 if total_batch is None else math.ceil(math.log10(total_batch))
+    batch_main_str = f'{batch:>{batch_cap}}'
+    batch_str = f'[batch: {batch_main_str}]' if total_batch is None else (
+        f'[batch: {batch_main_str}/{total_batch}]')
+    now = time.time()
+    diff_time = now - start
+    time_str = _as_minutes(diff_time, spaces=11)
+    time_str = f'[time: {time_str}]'
+
+    result = f'{print_prefix}{batch_str} {time_str} {acc_str} {loss_avg}'
+
+    if (first and validation) or (last and test):
+        result_len = len(result)
+        separator = ('=' if test else '-') * result_len
+        result = f'{separator}\n{result}' if first else f'{result}\n{separator}'
+
+    return result
+
+def default_epoch_info(info: TrainEpochInfo[typing.Any]) -> str:
+    epochs = info.epochs or 0
+    epoch = info.epoch or 0
+    start_epoch = info.start_epoch or 0
+    start = info.start or time.time()
+    loss = info.loss or 0
+    val_loss = info.val_loss or 0
+    accuracy = info.accuracy
+    val_accuracy = info.val_accuracy
+    count = info.count or 1
+    validate = info.validate
+    batch_interval = info.batch_interval
+
+    train_loss_avg = loss / count
+    val_loss_avg = val_loss / count
+    loss_avg = (
+        f'[val_loss: {val_loss_avg:.4f}, train_loss: {train_loss_avg:.4f}]'
+        if validate
+        else f'[loss: {train_loss_avg:.4f}]')
+
+    train_acc_str = f'{100.0 * accuracy / count:>5.1f}%' if accuracy is not None else ''
+    val_acc_str = (
+        f'{100.0 * val_accuracy / count:>5.1f}%'
+        if validate and (val_accuracy is not None)
+        else '')
+
+    if train_acc_str or val_acc_str:
+        acc_str = (
+            f'[val_accuracy: {val_acc_str}, train_accuracy: {train_acc_str}]'
+            if train_acc_str and val_acc_str
+            else (
+                f'[accuracy: {train_acc_str}]'
+                if train_acc_str
+                else f'[val_accuracy: {val_acc_str}]'
+            )
+        )
+    else:
+        acc_str = ''
+
+    epoch_cap = math.ceil(math.log10(epochs))
+    epoch_str = f'[end of epoch {epoch:>{epoch_cap}} ({(100.0 * epoch / epochs):>5.1f}%)]'
+    time_str = _time_since(start, (epoch - start_epoch + 1) / (epochs - start_epoch + 1), spaces=11)
+    time_str = f'[time: {time_str}]'
+    result = f'{epoch_str} {time_str} {acc_str} {loss_avg}'
+
+    if batch_interval:
+        result_len = len(result)
+        separator_b = '-' * result_len
+        separator_e = '=' * result_len
+        result = f'{separator_b}\n{result}\n{separator_e}'
+
+    return result
+
+class GeneralBatchHandler(BatchHandler):
+    def __init__(
+        self,
+        params: GeneralBatchHandlerParams,
+        get_results: typing.Callable[[], GeneralBatchHandlerResults],
+        update_results: typing.Callable[[GeneralBatchHandlerResults], None],
+        print_prefix: str,
+        get_batch_info: typing.Callable[[TrainBatchInfo[typing.Any]], str],
+        save_state: typing.Callable[[], None],
+        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any] | None,
         early_stopper: EarlyStopper | None = None,
-        get_epoch_info: typing.Callable[[TrainEpochInfo[M]], str] | None = None,
-        get_batch_info: typing.Callable[[TrainBatchInfo[M]], str] | None = None,
-        train_hook: typing.Callable[[TRH], None] | None = None,
-        validation_hook: typing.Callable[[TEH], None] | None = None,
-        save_path: str | None = None,
-        skip_load_state: bool = False,
-    ) -> None:
+        validation: bool = False,
+        test: bool = False,
+        best_accuracy: float | None = None,
+    ):
+        results = get_results()
+        cursor = results.cursor
+
         super().__init__(
-            train_dataloader=train_dataloader,
-            validation_dataloader=validation_dataloader,
-            train_hook=train_hook,
-            validation_hook=validation_hook,
-            epochs=epochs,
-            batch_interval=batch_interval,
-            save_every=save_every,
-            print_every=print_every,
-            metric_every=metric_every,
-            early_stopper=early_stopper,
-            get_epoch_info=get_epoch_info,
+            cursor=cursor,
+            metrics_handler=metrics_handler,
+            best_accuracy=best_accuracy)
+
+        self._params = params
+        self._get_results = get_results
+        self._update_results = update_results
+        self._print_prefix = print_prefix
+        self._save_state = save_state
+        self._early_stopper = early_stopper
+        self._get_batch_info = get_batch_info
+        self._validation = validation
+        self._test = test
+
+        self._print_loss: float = 0
+        self._print_accuracy: float | None = 0
+        self._print_count = 0
+        self._print_metrics: typing.Any | None = None
+
+        self._metric_loss: float = 0
+        self._metric_accuracy: float | None = 0
+        self._metric_count = 0
+        self._metric_time = 0
+        self._metrics: typing.Any | None = None
+
+        self._start = time.time()
+
+    def verify_early_stop(self) -> None:
+        if not self._early_stopper:
+            return
+
+        if self._early_stopper.check():
+            raise AbortedException()
+
+    def skip(self, batch: int) -> bool:
+        results = self._get_results()
+        start_batch = results.batch + 1
+        return batch < start_batch
+
+    def handle(
+        self,
+        batch: int,
+        total_batch: int | None,
+        amount: int,
+        last: bool,
+        loss: float,
+        accuracy: float | None,
+        time_diff: int,
+        batch_metrics: typing.Any | None,
+    ) -> None:
+        if not self.skip(batch):
+            self._handle(
+                batch=batch,
+                total_batch=total_batch,
+                amount=amount,
+                last=last,
+                loss=loss,
+                accuracy=accuracy,
+                time_diff=time_diff,
+                batch_metrics=batch_metrics,
+            )
+
+    def _handle(
+        self,
+        batch: int,
+        total_batch: int | None,
+        amount: int,
+        last: bool,
+        loss: float,
+        accuracy: float | None,
+        time_diff: int,
+        batch_metrics: typing.Any | None,
+    ) -> None:
+        super().handle_main(
+            amount=amount,
+            loss=loss,
+            accuracy=accuracy,
+            time_diff=time_diff,
+            batch_metrics=batch_metrics,
+        )
+
+        params = self._params
+        results = self._get_results()
+        update_results = self._update_results
+        print_prefix = self._print_prefix
+        save_state = self._save_state
+        metrics_handler = self.metrics_handler
+
+        self._print_loss += loss / amount
+        if accuracy is not None and self._print_accuracy is not None:
+            self._print_accuracy += accuracy
+        else:
+            self._print_accuracy = None
+        self._print_count += 1
+
+        print_loss = self._print_loss
+        print_accuracy = self._print_accuracy
+        print_count = self._print_count
+
+        self._metric_loss += loss / amount
+        if accuracy is not None and self._metric_accuracy is not None:
+            self._metric_accuracy += accuracy
+        else:
+            self._metric_accuracy = None
+        self._metric_time += time_diff
+        self._metric_count += 1
+
+        metric_loss = self._metric_loss
+        metric_accuracy = self._metric_accuracy
+        metric_time = self._metric_time
+        metric_count = self._metric_count
+
+        if metrics_handler:
+            self._print_metrics = metrics_handler.add(self._print_metrics, batch_metrics)
+            self._metrics = metrics_handler.add(self._metrics, batch_metrics)
+        else:
+            self._print_metrics = None
+            self._metrics = None
+
+        metrics = self._metrics
+        print_metrics = self._print_metrics
+
+        start = self._start
+
+        save_every = params.save_every
+        print_every = params.print_every
+        metric_every = params.metric_every
+
+        # print every print_every batches, but not on the last batch (it should be printed outside)
+        do_print = (print_every is not None) and (last or (batch % print_every == 0))
+        # save every save_every batches, but not on the last batch (it should be saved outside)
+        do_save = (save_every is not None) and (last or (batch % save_every == 0))
+        # update the persistent result, which is done when going to save,
+        # and also when defining the metrics
+        do_update = do_save or last or (metric_every is None) or (batch % metric_every == 0)
+        # change metric values when updating, as long as metric_every is set
+        do_metric = do_update and (metric_every is not None)
+
+        if do_print:
+            info: TrainBatchInfo[typing.Any] = TrainBatchInfo(
+                loss=print_loss,
+                accuracy=print_accuracy,
+                metrics=print_metrics,
+                count=print_count,
+                batch=batch,
+                total_batch=total_batch,
+                first=batch <= print_every if print_every is not None else False,
+                last=last,
+                start=start,
+                prefix=print_prefix,
+                validation=self._validation,
+                test=self._test)
+            info_str = self._get_batch_info(info)
+
+            if info_str:
+                print(info_str)
+
+            self._print_count = 0
+            self._print_loss = 0
+            self._print_accuracy = 0
+            self._print_metrics = None
+
+        if do_update:
+            results.batch = batch
+            results.total_batch = total_batch
+            results.cursor = ExecutionCursor(
+                amount=self.amount,
+                total_loss=self.total_loss,
+                total_accuracy=self.total_accuracy,
+                total_metrics=self.total_metrics,
+                total_time=self.total_time)
+
+            if do_metric:
+                accuracies = results.last_epoch_accuracies or []
+                losses = results.last_epoch_losses or []
+                times = results.last_epoch_times or []
+                epoch_metrics = results.last_epoch_metrics or []
+
+                if metric_accuracy is not None:
+                    accuracies.append((batch, metric_accuracy / metric_count))
+                losses.append((batch, metric_loss / metric_count))
+                times.append((batch, metric_time))
+                epoch_metrics.append((batch, metrics))
+
+                results.last_epoch_accuracies = accuracies
+                results.last_epoch_losses = losses
+                results.last_epoch_times = times
+                results.last_epoch_metrics = epoch_metrics
+
+            update_results(results)
+
+            self._metric_count = 0
+            self._metric_loss = 0
+            self._metric_accuracy = 0
+            self._metrics = None
+
+            if do_save:
+                save_state()
+
+class TrainBatchHandler(GeneralBatchHandler, typing.Generic[ATR]):
+    def __init__(
+        self,
+        validation: bool,
+        epoch: int,
+        params: ATR,
+        results: TrainResult,
+        get_batch_info: typing.Callable[[TrainBatchInfo[typing.Any]], str],
+        save_state: typing.Callable[[TrainResult], None],
+        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any] | None,
+        early_stopper: EarlyStopper | None = None,
+    ):
+        def get_results() -> GeneralBatchHandlerResults:
+            batch = (
+                results.val_batch
+                if validation
+                else results.train_batch)
+
+            total_batch = (
+                results.val_total_batch
+                if validation
+                else results.train_total_batch)
+
+            cursor = (
+                results.batch_val_cursor
+                if validation
+                else results.batch_train_cursor)
+
+            accuracies = (
+                results.last_epoch_val_accuracies
+                if validation
+                else results.last_epoch_accuracies)
+
+            losses = (
+                results.last_epoch_val_losses
+                if validation
+                else results.last_epoch_losses)
+
+            times = (
+                results.last_epoch_val_times
+                if validation
+                else results.last_epoch_times)
+
+            metrics = (
+                results.last_epoch_val_metrics
+                if validation
+                else results.last_epoch_metrics)
+
+            return GeneralBatchHandlerResults(
+                batch=batch,
+                total_batch=total_batch,
+                cursor=cursor,
+                last_epoch_accuracies=accuracies,
+                last_epoch_losses=losses,
+                last_epoch_times=times,
+                last_epoch_metrics=metrics)
+
+        def update_results(main_result: GeneralBatchHandlerResults) -> None:
+            accuracies = main_result.last_epoch_accuracies
+            losses = main_result.last_epoch_losses
+            times = main_result.last_epoch_times
+            metrics = main_result.last_epoch_metrics
+
+            if validation:
+                results.val_batch = main_result.batch
+                results.val_total_batch = main_result.total_batch
+                results.batch_val_cursor = main_result.cursor
+                results.last_epoch_val_accuracies = accuracies
+                results.last_epoch_val_losses = losses
+                results.last_epoch_val_times = times
+                results.last_epoch_val_metrics = metrics
+            else:
+                results.train_batch = main_result.batch
+                results.train_total_batch = main_result.total_batch
+                results.batch_train_cursor = main_result.cursor
+                results.last_epoch_accuracies = accuracies
+                results.last_epoch_losses = losses
+                results.last_epoch_times = times
+                results.last_epoch_metrics = metrics
+
+        epochs = params.epochs
+        epoch_cap = math.ceil(math.log10(epoch))
+        epoch_str = f'{epoch:>{epoch_cap}} ({100.0 * epoch / epochs:>5.1f}%)'
+        type_str = 'validation' if validation else 'train'
+        print_prefix = f'> [{type_str}] [epoch {epoch_str}] '
+
+        super().__init__(
+            params=GeneralBatchHandlerParams(
+                save_every=params.save_every,
+                print_every=params.print_every,
+                metric_every=params.metric_every),
+            get_results=get_results,
+            update_results=update_results,
+            print_prefix=print_prefix,
             get_batch_info=get_batch_info,
-            save_path=save_path,
-            skip_load_state=skip_load_state)
+            save_state=lambda: save_state(results),
+            early_stopper=early_stopper,
+            metrics_handler=metrics_handler,
+            validation=validation,
+            best_accuracy=results.best_accuracy if results else None)
 
-        self.model = model
-        self.criterion = criterion
-        self.optimizer = optimizer
-        self.scheduler = scheduler
-        self.step_only_on_accuracy_loss = step_only_on_accuracy_loss
-        self.clip_grad_max = clip_grad_max
+        self._active = params.batch_interval
+        self.best_accuracy = results.best_accuracy if results else None
 
-class SingleModelMinimalEvalParams(MinimalEvalParams):
-    def __init__(
+    def verify_early_stop(self) -> None:
+        if self._active:
+            super().verify_early_stop()
+
+    def skip(self, batch: int) -> bool:
+        if self._active:
+            return super().skip(batch)
+        return False
+
+    def handle(
         self,
-        model: nn.Module,
-        save_path: str | None = None,
-        skip_load_state: bool = False,
+        batch: int,
+        total_batch: int | None,
+        amount: int,
+        last: bool,
+        loss: float,
+        accuracy: float | None,
+        time_diff: int,
+        batch_metrics: typing.Any | None,
     ) -> None:
-        super().__init__(
-            save_path=save_path,
-            skip_load_state=skip_load_state)
+        if self._active:
+            super().handle(
+                batch=batch,
+                total_batch=total_batch,
+                amount=amount,
+                last=last,
+                loss=loss,
+                accuracy=accuracy,
+                time_diff=time_diff,
+                batch_metrics=batch_metrics)
+        else:
+            super().handle_main(
+                amount=amount,
+                loss=loss,
+                accuracy=accuracy,
+                time_diff=time_diff,
+                batch_metrics=batch_metrics)
 
-        self.model = model
-
-class SingleModelTestParams(MinimalTestParams[M], Generic[I, O, TEH, M]):
+class TestBatchHandler(GeneralBatchHandler, typing.Generic[ATE]):
     def __init__(
         self,
-        model: nn.Module,
+        params: ATE,
+        results: TestResult,
+        get_batch_info: typing.Callable[[TrainBatchInfo[typing.Any]], str],
+        save_state: typing.Callable[[TestResult], None],
+        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any] | None,
+        early_stopper: EarlyStopper | None = None,
+    ):
+        def get_results() -> GeneralBatchHandlerResults:
+            return GeneralBatchHandlerResults(
+                batch=results.batch,
+                total_batch=results.total_batch,
+                cursor=results.batch_cursor,
+                last_epoch_accuracies=results.last_epoch_accuracies,
+                last_epoch_losses=results.last_epoch_losses,
+                last_epoch_times=results.last_epoch_times,
+                last_epoch_metrics=results.last_epoch_metrics)
+
+        def update_results(main_result: GeneralBatchHandlerResults) -> None:
+            nonlocal results
+            results.batch = main_result.batch
+            results.total_batch = main_result.total_batch
+            results.batch_cursor = main_result.cursor
+            results.last_epoch_accuracies = main_result.last_epoch_accuracies
+            results.last_epoch_losses = main_result.last_epoch_losses
+            results.last_epoch_times = main_result.last_epoch_times
+
+        super().__init__(
+            params=GeneralBatchHandlerParams(
+                save_every=params.save_every,
+                print_every=params.print_every,
+                metric_every=params.metric_every),
+            get_results=get_results,
+            update_results=update_results,
+            print_prefix='[test] ',
+            get_batch_info=get_batch_info,
+            save_state=lambda: save_state(results),
+            early_stopper=early_stopper,
+            metrics_handler=metrics_handler,
+            test=True)
+
+####################################################
+################## Action Wrapper ##################
+####################################################
+
+class ActionWrapperActionParams(typing.Generic[AWP, AWS]):
+    def __init__(
+        self,
+        main_params: AWP,
+        full_state: AWS | None,
+        epoch: int,
+        batch_handler: BatchHandler,
+    ):
+        self.main_params = main_params
+        self.full_state = full_state
+        self.epoch = epoch
+        self.batch_handler = batch_handler
+
+class ActionWrapper(typing.Generic[INF, ATR, STR, ATE, STE]):
+    def __init__(
+        self,
+        state_handler: StateHandler[INF, ATR, STR, ATE, STE],
+        train_epoch: typing.Callable[[ActionWrapperActionParams[ATR, STR]], BatchHandlerResult],
+        validate: typing.Callable[
+            [ActionWrapperActionParams[ATR, STR]],
+            BatchHandlerResult | None
+        ] | None,
+        test_inner: typing.Callable[
+            [ActionWrapperActionParams[ATE, STE]],
+            BatchHandlerResult | None
+        ] | None,
+        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any] | None,
+    ):
+        self.state_handler = state_handler
+        self.train_epoch = train_epoch
+        self.validate = validate
+        self.test_inner = test_inner
+        self.metrics_handler = metrics_handler
+
+    def can_run(self, early_stopper: EarlyStopper | None) -> bool:
+        if not early_stopper:
+            return True
+
+        return not early_stopper.check()
+
+    def _new_train_result(self) -> TrainResult:
+        return TrainResult(
+            epoch=0,
+            early_stopped=False,
+            early_stopped_max_epochs=0,
+            train_batch=0,
+            train_total_batch=None,
+            val_batch=0,
+            val_total_batch=None,
+            last_loss=0.0,
+            last_accuracy=0.0,
+            last_metrics=None,
+            last_train_loss=0.0,
+            last_train_accuracy=0.0,
+            last_train_metrics=None,
+            last_val_loss=0.0,
+            last_val_accuracy=0.0,
+            last_val_metrics=None,
+            best_epoch=0,
+            best_accuracy=0.0,
+            best_train_accuracy=0.0,
+            best_val_accuracy=0.0,
+            total_train_time=0,
+            total_val_time=0,
+            accuracies=[],
+            losses=[],
+            times=[],
+            metrics=[] if self.metrics_handler else None,
+            val_accuracies=[] if self.validate else None,
+            val_losses=[] if self.validate else None,
+            val_times=[] if self.validate else None,
+            val_metrics=[] if self.validate and self.metrics_handler else None)
+
+    def train(self, params: ATR) -> TrainResult | None:
+        full_state, _ = self.state_handler.load_train_state(params)
+        results: TrainResult = full_state.train_results if full_state else self._new_train_result()
+
+        try:
+            if (not results) or (not results.early_stopped):
+                return self._train(params)
+
+            return results
+        except AbortedException:
+            return None
+
+    def test(self, params: ATE) -> TestResult | None:
+        try:
+            return self._test(params)
+        except AbortedException:
+            return None
+
+    def _train(self, params: ATR) -> TrainResult:
+        epochs = params.epochs
+        batch_interval = params.batch_interval
+        save_every = params.save_every
+        print_every = params.print_every
+        metric_every = params.metric_every
+        early_stopper = params.early_stopper
+        get_epoch_info = params.get_epoch_info or default_epoch_info
+
+        full_state, state_dict = self.state_handler.load_train_state(params)
+        results: TrainResult = full_state.train_results if full_state else self._new_train_result()
+        start_epoch = results.epoch + 1
+
+        print_count = 0
+        print_loss: float = 0
+        print_accuracy: float | None = 0
+        print_val_loss: float = 0
+        print_val_accuracy : float | None= 0
+
+        # Keep track of losses and accuracies for the metrics
+        metric_count = 0
+        metric_loss: float = 0
+        metric_accuracy: float | None = 0
+        metric_train_time = 0
+        metric_val_loss: float = 0
+        metric_val_accuracy: float | None = 0
+        metric_val_time = 0
+
+        print_metrics: typing.Any | None = None
+        print_val_metrics: typing.Any | None = None
+        metrics: typing.Any | None = None
+
+        epoch = 0
+        train_loss: float = 0.0
+        train_accuracy: float | None = 0.0
+        val_loss: float = 0.0
+        val_accuracy: float | None = 0.0
+        train_metrics: typing.Any | None = None
+        val_metrics: typing.Any | None = None
+
+        get_batch_info = params.get_batch_info if params.get_batch_info else default_batch_info
+        metrics_handler = self.metrics_handler
+
+        def update_results() -> None:
+            results.epoch = epoch
+            results.train_batch = 0
+            results.val_batch = 0
+            results.batch_train_cursor = None
+            results.batch_val_cursor = None
+            results.epoch_cursor = ExecutionCursor(
+                amount=metric_count,
+                total_loss=metric_loss,
+                total_accuracy=metric_accuracy,
+                total_time=metric_train_time,
+                total_metrics=metrics)
+            results.last_train_loss = train_loss
+            results.last_train_accuracy = train_accuracy
+            results.last_train_metrics = train_metrics
+            results.last_val_loss = val_loss
+            results.last_val_accuracy = val_accuracy
+            results.last_val_metrics = val_metrics
+
+            if not self.validate:
+                results.last_loss = train_loss
+                results.last_accuracy = train_accuracy
+                results.last_metrics = train_metrics
+            else:
+                results.last_loss = val_loss
+                results.last_accuracy = val_accuracy
+                results.last_metrics = val_metrics
+
+        start = time.time()
+
+        if print_every is not None:
+            if start_epoch < epochs + 1:
+                print_str = f'Starting training for {epochs} epochs...'
+                max_len = len(print_str)
+
+                if start_epoch > 1:
+                    next_print_str = f'(starting from epoch {start_epoch})'
+                    print_str += f'\n{next_print_str}'
+                    max_len = max(max_len, len(next_print_str))
+
+                separator = '=' * max_len
+                print(print_str)
+                print(separator)
+            else:
+                print(f'Training already completed ({epochs} epochs).')
+
+        def verify_early_stop(force_save: bool) -> TrainResult | None:
+            early_stopper = params.early_stopper
+
+            if early_stopper:
+                stopped = early_stopper.check()
+                finished = isinstance(
+                    early_stopper,
+                    TrainEarlyStopper,
+                ) and early_stopper.check_finish()
+
+                if finished or stopped:
+                    save_result = (
+                        (finished and (not results.early_stopped))
+                        or
+                        (
+                            force_save
+                            and
+                            stopped
+                            and
+                            (epoch > start_epoch)
+                            and
+                            (epoch > results.epoch)
+                        )
+                    )
+
+                    if save_result:
+                        update_results()
+
+                        if finished:
+                            results.early_stopped = True
+                            results.early_stopped_max_epochs = epochs
+
+                        self.state_handler.save_train_state(
+                            params,
+                            results,
+                            state_dict)
+
+                    if finished:
+                        return results
+                    else:
+                        raise AbortedException()
+
+            return None
+
+        try:
+            for epoch in range(start_epoch, epochs + 1):
+                r = verify_early_stop(force_save=True)
+                if r:
+                    return r
+
+                batch_handler = TrainBatchHandler(
+                    validation=False,
+                    epoch=epoch,
+                    params=params,
+                    results=results,
+                    save_state=lambda result: self.state_handler.save_train_state(
+                        params, result, state_dict),
+                    early_stopper=early_stopper,
+                    metrics_handler=metrics_handler,
+                    get_batch_info=get_batch_info)
+
+                train_params = ActionWrapperActionParams(
+                    main_params=params,
+                    full_state=full_state,
+                    epoch=epoch,
+                    batch_handler=batch_handler)
+
+                with torch.set_grad_enabled(True):
+                    result = self.train_epoch(train_params)
+
+                train_loss = result.total_loss
+                train_accuracy = result.total_accuracy
+                train_time = result.total_time
+                train_metrics = result.total_metrics
+
+                metric_loss += train_loss
+                print_loss += train_loss
+                if metric_accuracy is not None and train_accuracy is not None:
+                    metric_accuracy += train_accuracy
+                else:
+                    metric_accuracy = None
+                if print_accuracy is not None and train_accuracy is not None:
+                    print_accuracy += train_accuracy
+                else:
+                    print_accuracy = None
+                metric_train_time += train_time
+
+                if train_metrics:
+                    print_metrics = metrics_handler.add(
+                        print_metrics,
+                        train_metrics,
+                    ) if metrics_handler else None
+                    metrics = metrics_handler.add(
+                        metrics,
+                        train_metrics,
+                    ) if metrics_handler else None
+
+                val_result = None
+
+                if not self.validate:
+                    if params.early_stopper and isinstance(params.early_stopper, TrainEarlyStopper):
+                        params.early_stopper.update_epoch(
+                            loss=train_loss,
+                            accuracy=train_accuracy,
+                            metrics=train_metrics)
+                else:
+                    batch_handler = TrainBatchHandler(
+                        validation=True,
+                        epoch=epoch,
+                        params=params,
+                        results=results,
+                        save_state=lambda result: self.state_handler.save_train_state(
+                            params, result, state_dict),
+                        early_stopper=early_stopper,
+                        metrics_handler=metrics_handler,
+                        get_batch_info=get_batch_info)
+
+                    val_params = ActionWrapperActionParams(
+                        main_params=params,
+                        full_state=full_state,
+                        epoch=epoch,
+                        batch_handler=batch_handler)
+
+                    with torch.set_grad_enabled(False):
+                        val_result = self.validate(val_params)
+
+                    if val_result:
+                        val_loss = val_result.total_loss
+                        val_accuracy = val_result.total_accuracy
+                        val_time = val_result.total_time
+                        val_metrics_item = val_result.total_metrics
+
+                        metric_val_loss += val_loss
+                        print_val_loss += val_loss
+                        if val_accuracy is not None:
+                            if metric_val_accuracy is not None:
+                                metric_val_accuracy += val_accuracy
+
+                            if print_val_accuracy is not None:
+                                print_val_accuracy += val_accuracy
+                        else:
+                            metric_val_accuracy = None
+                            print_val_accuracy = None
+                        metric_val_time += val_time
+
+                        if val_metrics_item:
+                            print_val_metrics = metrics_handler.add(
+                                print_val_metrics,
+                                val_metrics_item,
+                            ) if metrics_handler else None
+                            val_metrics = metrics_handler.add(
+                                val_metrics,
+                                val_metrics_item,
+                            ) if metrics_handler else None
+
+                        if params.early_stopper and isinstance(
+                            params.early_stopper,
+                            TrainEarlyStopper,
+                        ):
+                            params.early_stopper.update_epoch(
+                                loss=val_loss,
+                                accuracy=val_accuracy,
+                                metrics=val_metrics_item)
+
+                print_count += 1
+                metric_count += 1
+                last = epoch == epochs
+
+                # print every print_every epochs, or if last epoch,
+                # or if batch_interval is set (to print partial epochs)
+                do_print = (
+                    (print_every is not None)
+                    and
+                    (batch_interval or last or (epoch % print_every == 0))
+                )
+                # save every save_every epochs, or if last epoch,
+                # or if batch_interval is set (to save partial epochs)
+                do_save = (
+                    (save_every is not None)
+                    and
+                    (batch_interval or last or (epoch % save_every == 0))
+                )
+                # update changes the result to store, which is done when going to save,
+                # and also when defining the metrics
+                do_update = do_save or last or (metric_every is None) or (epoch % metric_every == 0)
+                # change metric values when updating, as long as metric_every is set
+                do_metric = do_update and (metric_every is not None)
+
+                if do_print:
+                    info: TrainEpochInfo[typing.Any] = TrainEpochInfo(
+                        epochs=epochs,
+                        epoch=epoch,
+                        start_epoch=start_epoch,
+                        start=start,
+                        loss=print_loss,
+                        val_loss=print_val_loss,
+                        accuracy=print_accuracy,
+                        val_accuracy=print_val_accuracy,
+                        metrics=print_metrics,
+                        val_metrics=print_val_metrics,
+                        count=print_count,
+                        validate=bool(val_result),
+                        batch_interval=batch_interval)
+                    get_epoch_info = (
+                        params.get_epoch_info
+                        if params.get_epoch_info else
+                        default_epoch_info)
+                    print_str = get_epoch_info(info)
+
+                    if print_str:
+                        print(print_str)
+
+                    print_count = 0
+                    print_loss = 0
+                    print_accuracy = 0
+                    print_val_loss = 0
+                    print_val_accuracy = 0
+                    print_metrics = None
+
+                if do_update:
+                    update_results()
+
+                    if not do_metric:
+                        results.total_train_time += metric_train_time
+                        results.total_val_time += metric_val_time
+                        metric_train_time = 0
+                        metric_val_time = 0
+                    else:
+                        results.total_train_time += metric_train_time
+                        results.total_val_time += metric_val_time
+
+                        if metric_accuracy is not None:
+                            results.accuracies.append(
+                                (epoch, metric_accuracy / metric_count))
+                        results.losses.append((epoch, metric_loss / metric_count))
+                        results.times.append((epoch, metric_train_time))
+
+                        if results.metrics is not None:
+                            results.metrics.append((epoch, metrics))
+
+                        if val_result:
+                            if results.val_accuracies is not None:
+                                if metric_val_accuracy is not None:
+                                    results.val_accuracies.append(
+                                        (epoch, metric_val_accuracy / metric_count))
+
+                            if results.val_losses is not None:
+                                results.val_losses.append(
+                                    (epoch, metric_val_loss / metric_count))
+
+                            if results.val_times is not None:
+                                results.val_times.append((epoch, metric_val_time))
+
+                            if results.val_metrics is not None:
+                                results.val_metrics.append((epoch, val_metrics))
+
+                        # sort by accuracy, get the last one (best case)
+                        accuracies_to_use = (
+                            results.val_accuracies
+                            if val_result and results.val_accuracies
+                            else results.accuracies)
+                        best_cases = sorted(accuracies_to_use, key=lambda x: x[1])
+                        best_case = best_cases[-1] if best_cases else None
+
+                        if best_case is not None and results.best_accuracy is not None:
+                            best_epoch, best_accuracy = best_case
+
+                            if best_accuracy > results.best_accuracy:
+                                results.best_epoch = best_epoch
+                                results.best_accuracy = best_accuracy
+
+                        metric_count = 0
+                        metric_loss = 0
+                        metric_accuracy = 0
+                        metric_train_time = 0
+                        metric_val_loss = 0
+                        metric_val_accuracy = 0
+                        metric_val_time = 0
+                        metrics = None
+                        val_metrics = None
+
+                    if do_save:
+                        self.state_handler.save_train_state(
+                            params, results, state_dict)
+        except AbortedException as e:
+            r = verify_early_stop(force_save=False)
+            if r:
+                return r
+            raise e
+
+        return results
+
+    def _test(self, params: ATE) -> TestResult:
+        test_state, state_dict = self.state_handler.load_test_state(params)
+        train_results = test_state.train_results if test_state else None
+        epoch = (train_results.epoch or 0) if train_results else 0
+        test_results: TestResult | None = test_state.test_results if test_state else None
+        test_epoch = test_results.epoch if test_results else None
+
+        early_stopper = params.early_stopper
+        metrics_handler = self.metrics_handler
+
+        get_batch_info = params.get_batch_info if params.get_batch_info else default_batch_info
+
+        if not self.test_inner:
+            raise Exception('test_inner is not defined')
+
+        if not self.can_run(early_stopper):
+            raise AbortedException()
+
+        if (
+            (not test_results)
+            or
+            test_results.batch
+            or
+            (test_epoch is None)
+            or
+            (test_epoch < epoch)
+        ):
+            print_str = 'Starting test...'
+            separator = '=' * len(print_str)
+            print(separator)
+            print(print_str)
+
+            test_results = TestResult(
+                epoch=epoch,
+                loss=0.0,
+                accuracy=0.0,
+                total_time=0,
+                batch=0,
+                total_batch=None,
+                last_epoch_losses=None,
+                last_epoch_accuracies=None,
+                last_epoch_times=None)
+
+            batch_handler = TestBatchHandler(
+                params=params,
+                results=test_results,
+                save_state=lambda result: self.state_handler.save_test_state(
+                    params, result, state_dict),
+                early_stopper=early_stopper,
+                metrics_handler=metrics_handler,
+                get_batch_info=get_batch_info)
+
+            test_params = ActionWrapperActionParams(
+                main_params=params,
+                full_state=test_state,
+                epoch=epoch,
+                batch_handler=batch_handler)
+
+            with torch.set_grad_enabled(False):
+                result = self.test_inner(test_params)
+
+            if result:
+                loss = result.total_loss
+                accuracy = result.total_accuracy
+                total_time = result.total_time
+
+                test_results.epoch = epoch
+                test_results.batch = 0
+                test_results.loss = loss
+                test_results.accuracy = accuracy
+                test_results.total_time = total_time
+
+                print_str = f'Test completed in {total_time/1000:.3f} seconds.'
+                separator = '=' * len(print_str)
+                print(separator)
+                print(print_str)
+                print(separator)
+        else:
+            if params.print_every is not None:
+                print_str = f'test epoch: {test_epoch}, last trained epoch: {epoch}'
+                print_str = f'Test already completed ({print_str}).'
+                print(print_str)
+
+        if not test_results:
+            raise Exception('the test returned no result')
+
+        if test_state and test_results:
+            self.state_handler.save_test_state(
+                params, test_results, state_dict)
+
+        return test_results
+
+####################################################
+############### General Action Impl ################
+####################################################
+
+class GeneralAction(typing.Generic[I, O, MT]):
+    def __init__(
+        self,
+        random_seed: int | None,
+        use_best: bool,
+        executor: BatchExecutor[I, O],
+        accuracy_calculator: BatchAccuracyCalculator[I, O] | None,
+        metrics_handler: MetricsHandler[I, O, MT] | None,
+        metrics_calculator: MetricsCalculator | None = None,
+    ):
+        main_state_handler = SingleModelStateHandler[
+            GeneralTrainParams[I, O, MT],
+            GeneralTestParams[I, O, MT],
+        ](use_best=use_best)
+
+        action_wrapper = ActionWrapper(
+            state_handler=main_state_handler,
+            train_epoch=lambda params: GeneralActionRunner(
+                train=True,
+                batch_handler=params.batch_handler,
+                dataloader=params.main_params.train_dataloader,
+                hook=params.main_params.train_hook,
+                model=params.main_params.model,
+                optimizer=params.main_params.optimizer,
+                scheduler=(
+                    None
+                    if params.main_params.validation_dataloader
+                    is not None else params.main_params.scheduler),
+                criterion=params.main_params.criterion,
+                step_only_on_accuracy_loss=params.main_params.step_only_on_accuracy_loss,
+                clip_grad_max=params.main_params.clip_grad_max,
+                epoch=params.epoch,
+                random_seed=random_seed,
+                executor=executor,
+                accuracy_calculator=accuracy_calculator,
+            ).run(),
+            validate=lambda params: GeneralActionRunner(
+                train=False,
+                batch_handler=params.batch_handler,
+                dataloader=params.main_params.validation_dataloader,
+                hook=params.main_params.validation_hook,
+                model=params.main_params.model,
+                optimizer=None,
+                scheduler=params.main_params.scheduler,
+                criterion=params.main_params.criterion,
+                step_only_on_accuracy_loss=params.main_params.step_only_on_accuracy_loss,
+                clip_grad_max=None,
+                epoch=params.epoch,
+                random_seed=random_seed,
+                executor=executor,
+                accuracy_calculator=accuracy_calculator,
+            ).run() if params.main_params.validation_dataloader is not None else None,
+            test_inner=lambda params: GeneralActionRunner(
+                train=False,
+                batch_handler=params.batch_handler,
+                dataloader=params.main_params.dataloader,
+                hook=params.main_params.hook,
+                model=params.main_params.model,
+                optimizer=None,
+                scheduler=None,
+                criterion=params.main_params.criterion,
+                step_only_on_accuracy_loss=False,
+                clip_grad_max=None,
+                epoch=params.epoch,
+                random_seed=random_seed,
+                executor=executor,
+                accuracy_calculator=accuracy_calculator,
+            ).run(),
+            metrics_handler=metrics_handler,
+        )
+
+        def load_eval_state(params: SingleModelMinimalEvalParams) -> None:
+            main_state_handler.load_eval_state(params)
+
+        self.train = action_wrapper.train
+        self.test = action_wrapper.test
+        self.info = main_state_handler.info
+        self.load_eval_state = load_eval_state
+        self.main_state_handler = main_state_handler
+        self.metrics_calculator = metrics_calculator
+
+    def calculate_metrics(
+        self,
+        params: MetricsCalculatorInputParams,
+    ) -> dict[str, typing.Any] | None:
+        main_state_handler = self.main_state_handler
+        metrics_calculator = self.metrics_calculator
+        save_path = params.save_path
+
+        if not metrics_calculator or not save_path:
+            return None
+
+        info = main_state_handler.load_state_with_metrics(save_path=save_path)
+
+        if not info:
+            return None
+
+        calc_params = MetricsCalculatorParams(info=info, model=params.model)
+        metrics = metrics_calculator.run(calc_params)
+
+        main_state_handler.save_metrics(metrics, save_path=save_path)
+
+        return metrics
+
+    def define_as_pending(self, save_path: str) -> None:
+        self.main_state_handler.define_as_completed(completed=False, save_path=save_path)
+
+    def define_as_completed(self, save_path: str) -> None:
+        self.main_state_handler.define_as_completed(completed=True, save_path=save_path)
+
+class GeneralActionRunner(typing.Generic[I, O, T]):
+    def __init__(
+        self,
+        train: bool,
         dataloader: DataLoader[tuple[I, torch.Tensor]],
+        hook: typing.Callable[[GeneralHookParams[I, O]], None] | None,
+        model: nn.Module,
+        optimizer: optim.Optimizer | None,
+        scheduler: Scheduler | None,
         criterion: nn.Module | typing.Callable[[BatchInOutParams[I, O]], torch.Tensor],
-        save_every: int | None,
-        print_every: int | None,
-        metric_every: int | None,
-        early_stopper: EarlyStopper | None = None,
-        get_batch_info: typing.Callable[[TrainBatchInfo[M]], str] | None = None,
-        hook: typing.Callable[[TEH], None] | None = None,
-        save_path: str | None = None,
-        skip_load_state: bool = False,
-    ) -> None:
-        super().__init__(
-            save_every=save_every,
-            print_every=print_every,
-            metric_every=metric_every,
-            early_stopper=early_stopper,
-            get_batch_info=get_batch_info,
-            save_path=save_path,
-            skip_load_state=skip_load_state)
+        step_only_on_accuracy_loss: bool,
+        clip_grad_max: float | None,
+        epoch: int,
+        random_seed: int | None,
+        executor: BatchExecutor[I, O],
+        accuracy_calculator: BatchAccuracyCalculator[I, O] | None,
+        batch_handler: BatchHandler,
+    ):
+        last_output: O | None = None
 
-        self.model = model
+        self.train = train
         self.dataloader = dataloader
         self.hook = hook
-        self.criterion = criterion
-
-ATR = TypeVar("ATR", bound=MinimalTrainParams[Any, Any, Any, Any])
-ATE = TypeVar("ATE", bound=MinimalEvalParams)
-
-####################################################
-################## General States ##################
-####################################################
-
-class SingleModelEvalState(MinimalFullState):
-    def __init__(
-        self,
-        model: nn.Module,
-        train_results: TrainResult,
-        test_results: TestResult | None,
-        metrics: dict[str, Any] | None,
-    ):
-        super().__init__(
-            train_results=train_results,
-            test_results=test_results)
         self.model = model
-        self.metrics = metrics
-
-    def state_dict(self) -> dict[str, Any]:
-        return dict(
-            test_results=self.test_results.state_dict() if self.test_results else None,
-            metrics=self.metrics)
-
-    @staticmethod
-    def from_state_dict(
-        model: nn.Module,
-        use_best: bool,
-        state_dict: dict[str, Any],
-    ) -> 'SingleModelEvalState':
-        best_state_dict = state_dict['best']
-        last_state_dict = state_dict['last']
-        outer_state_dict = best_state_dict if use_best else last_state_dict
-
-        test_results_dict = state_dict.get('test_results')
-        metrics = state_dict.get('metrics')
-
-        model.load_state_dict(outer_state_dict['model'])
-        train_results = TrainResult.from_state_dict(
-            state_dict['train_results'])
-        test_results = TestResult.from_state_dict(
-            test_results_dict) if test_results_dict else None
-
-        return SingleModelEvalState(
-            model=model,
-            train_results=train_results,
-            test_results=test_results,
-            metrics=metrics)
-
-    @staticmethod
-    def from_state_dict_with_params(
-        params: SingleModelMinimalEvalParams,
-        use_best: bool,
-        state_dict: dict[str, Any],
-    ) -> 'SingleModelEvalState':
-        return SingleModelEvalState.from_state_dict(
-            model=params.model,
-            use_best=use_best,
-            state_dict=state_dict,
-        )
-
-class SingleModelFullState(MinimalFullState):
-    def __init__(
-        self,
-        model: nn.Module,
-        optimizer: optim.Optimizer,
-        best_state_dict: dict[str, Any] | None,
-        train_results: TrainResult,
-        test_results: TestResult | None,
-        metrics: dict[str, Any] | None,
-        scheduler: Scheduler | None = None,
-        early_stopper: EarlyStopper | None = None,
-    ):
-        super().__init__(
-            train_results=train_results,
-            test_results=test_results)
-        self.model = model
-        self.metrics = metrics
         self.optimizer = optimizer
         self.scheduler = scheduler
-        self.early_stopper = early_stopper
-        self.best_state_dict = best_state_dict
+        self.criterion = criterion
+        self.step_only_on_accuracy_loss = step_only_on_accuracy_loss
+        self.clip_grad_max = clip_grad_max
+        self.epoch = epoch
+        self.random_seed = random_seed
+        self.executor = executor
+        self.accuracy_calculator = accuracy_calculator
+        self.batch_handler = batch_handler
+        self.best_accuracy = batch_handler.best_accuracy
 
-    def state_dict(self) -> dict[str, Any]:
-        best_state_dict = self.best_state_dict
-        last_state_dict = ModelMainState(
-            model=self.model,
-            optimizer=self.optimizer,
-            scheduler=self.scheduler,
-            early_stopper=self.early_stopper,
-        ).state_dict()
+        self.last_output = last_output
 
-        if (not best_state_dict) or (self.train_results.best_epoch == self.train_results.epoch):
-            best_state_dict = last_state_dict
+    def run_batch(
+        self,
+        params: BatchHandlerRunParams[tuple[I, torch.Tensor]],
+    ) -> BatchHandlerData[I, O]:
+        train = self.train
+        hook = self.hook
+        model = self.model
+        optimizer = self.optimizer
+        criterion = self.criterion
+        clip_grad_max = self.clip_grad_max
+        epoch = self.epoch
+        executor = self.executor
+        accuracy_calculator = self.accuracy_calculator
 
-        return dict(
-            best=best_state_dict,
-            last=last_state_dict,
-            train_results=self.train_results.state_dict(),
-            test_results=self.test_results.state_dict() if self.test_results else None)
+        data = params.data
+        batch = params.batch
+        amount = params.amount
 
-    @staticmethod
-    def from_state_dict(
-            model: nn.Module,
-            optimizer: optim.Optimizer,
-            scheduler: Scheduler | None,
-            early_stopper: EarlyStopper | None,
-            use_best: bool,
-            state_dict: dict[str, Any]) -> 'SingleModelFullState':
-        best_state_dict = state_dict['best']
-        last_state_dict = state_dict['last']
-        outer_state_dict = best_state_dict if use_best else last_state_dict
+        input_batch, target_batch = data
+        current_amount: int = len(target_batch)
 
-        model.load_state_dict(outer_state_dict['model'])
-        optimizer.load_state_dict(outer_state_dict['optimizer'])
+        if not current_amount:
+            raise Exception('Empty batch')
 
-        scheduler_dict = outer_state_dict.get('scheduler')
-        early_stopper_dict = outer_state_dict.get('early_stopper')
+        if train and optimizer:
+            optimizer.zero_grad()
 
-        if scheduler is not None and scheduler_dict is not None:
-            scheduler.load_state_dict(scheduler_dict)
-
-        if early_stopper is not None and early_stopper_dict is not None:
-            early_stopper.load_state_dict(early_stopper_dict)
-
-        test_results_dict = state_dict.get('test_results')
-        metrics = state_dict.get('metrics')
-
-        train_results = TrainResult.from_state_dict(
-            state_dict['train_results'])
-        test_results = TestResult.from_state_dict(
-            test_results_dict) if test_results_dict else None
-
-        return SingleModelFullState(
+        # call the model with the input and retrieve the output
+        executor_params = BatchExecutorParams(
             model=model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            early_stopper=early_stopper,
-            train_results=train_results,
-            test_results=test_results,
-            metrics=metrics,
-            best_state_dict=best_state_dict)
+            input=input_batch,
+            last_output=self.last_output)
+        full_output = executor.run(executor_params)
+        output = executor.main_output(full_output)
+        self.last_output = full_output
 
-    @staticmethod
-    def from_state_dict_with_params(
-            params: SingleModelTrainParams[Any, Any, Any, Any, Any],
-            use_best: bool,
-            state_dict: dict[str, Any]) -> 'SingleModelFullState':
-        return SingleModelFullState.from_state_dict(
-            model=params.model,
-            optimizer=params.optimizer,
-            scheduler=params.scheduler,
-            early_stopper=params.early_stopper,
-            use_best=use_best,
-            state_dict=state_dict,
-        )
+        if isinstance(criterion, nn.Module):
+            loss: torch.Tensor = criterion(output, target_batch)
+        else:
+            loss_params = BatchInOutParams(
+                input=input_batch,
+                full_output=full_output,
+                output=output,
+                target=target_batch)
+            loss = criterion(loss_params)
+
+        loss_value = loss.item()
+
+        if math.isnan(loss_value):
+            raise Exception('The loss is NaN')
+
+        if train :
+            loss.backward() # type: ignore
+
+            if clip_grad_max is not None:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    clip_grad_max)
+
+            if optimizer:
+                optimizer.step()
+
+        with torch.no_grad():
+            if accuracy_calculator is not None:
+                accuracy_params = BatchAccuracyParams(
+                    input=input_batch,
+                    full_output=full_output,
+                    output=output,
+                    target=target_batch)
+                batch_accuracy = accuracy_calculator.run(accuracy_params)
+            else:
+                batch_accuracy = None
+
+            if hook:
+                hook(GeneralHookParams(
+                    epoch=epoch,
+                    batch=batch,
+                    current_amount=amount + current_amount,
+                    loss=loss_value,
+                    accuracy=batch_accuracy,
+                    target=target_batch,
+                    input=input_batch,
+                    output=output,
+                    full_output=self.last_output))
+
+        return BatchHandlerData(
+            amount=current_amount,
+            loss=loss_value,
+            accuracy=batch_accuracy,
+            input=input_batch,
+            full_output=full_output,
+            output=output,
+            target=target_batch)
+
+    def run(self) -> BatchHandlerResult:
+        train = self.train
+        model = self.model
+        optimizer = self.optimizer
+        scheduler = self.scheduler
+        step_only_on_accuracy_loss = self.step_only_on_accuracy_loss
+
+        if train:
+            model.train()
+
+            if not optimizer:
+                raise Exception('optimizer is not defined')
+        else:
+            model.eval()
+
+        self.last_output = None
+
+        result = self.batch_handler.run(
+            dataloader=self.dataloader,
+            fn=self.run_batch,
+            epoch=self.epoch,
+            random_seed=self.random_seed)
+
+        if scheduler:
+            new_accuracy = result.total_accuracy
+            best_accuracy = self.best_accuracy
+            worse_accuracy = (
+                new_accuracy is not None
+                and best_accuracy is not None
+                and best_accuracy > new_accuracy)
+
+            if new_accuracy is None:
+                scheduler.step()
+            else:
+                if worse_accuracy or not step_only_on_accuracy_loss:
+                    scheduler.step()
+
+                if best_accuracy is None or not worse_accuracy:
+                    self.best_accuracy = new_accuracy
+
+        return result
 
 ####################################################
-################## General Action ##################
+################ Private Functions #################
 ####################################################
 
-INF = typing.TypeVar("INF")
+def _as_minutes(s: float, spaces: int | None = None) -> str:
+    m = math.floor(s / 60)
+    s -= m * 60
+    info = f'{m:.0f}m {s:02.2f}s'
+    return f'{info:>{spaces}}' if spaces else info
 
-class AbstractAction(Generic[ATR, ATE, INF]):
-    def __init__(
-            self,
-            train: typing.Callable[[ATR], TrainResult | None],
-            test: typing.Callable[[ATE], TestResult | None],
-            info: typing.Callable[[str], INF | None],
-            load_eval_state: typing.Callable[[SingleModelMinimalEvalParams], None]):
-        self.train = train
-        self.test = test
-        self.info = info
-        self.load_eval_state = load_eval_state
+def _time_since(since: float, percent: float, spaces: int | None = None) -> str:
+    now = time.time()
+    s = now - since
+    es = s / (percent)
+    rs = es - s
+    passed = _as_minutes(s, spaces=spaces)
+    remaining = _as_minutes(rs, spaces=spaces)
+    return f'{passed} (eta: {remaining})'
+
+def _time_diff_millis(start_time: float, end_time: float) -> int:
+    return int((end_time - start_time) * 1000)

@@ -1,4 +1,4 @@
-from ._action import (
+from ._action_data import (
     BaseResult,
     ExecutionCursor,
     TrainResult,
@@ -17,12 +17,9 @@ from ._action import (
     SingleModelTestParams,
     SingleModelEvalState,
     SingleModelFullState,
-    AbstractAction,
-)
-from ._action_impl import (
     MinimalStateWithMetrics,
 )
-from ._general_action import (
+from ._action_handlers import (
     GeneralHookParams,
     GeneralEvalBaseResult,
     GeneralEvalResult,
@@ -58,7 +55,6 @@ __all__ = [
     'SingleModelTestParams',
     'SingleModelEvalState',
     'SingleModelFullState',
-    'AbstractAction',
     'MinimalStateWithMetrics',
     'GeneralHookParams',
     'GeneralEvalBaseResult',
