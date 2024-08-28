@@ -422,8 +422,7 @@ class GeneralHookParams(MinimalHookParams, typing.Generic[I, O]):
         accuracy: float | None,
         target: torch.Tensor,
         input: I,
-        full_output: O | None,
-        output: torch.Tensor,
+        output: O | None,
     ):
         super().__init__(
             current_amount=current_amount,
@@ -435,29 +434,24 @@ class GeneralHookParams(MinimalHookParams, typing.Generic[I, O]):
         self.target = target
         self.input = input
         self.output = output
-        self.full_output = full_output
 
 class GeneralEvalBaseResult(typing.Generic[I, O]):
     def __init__(
         self,
         input: I,
-        full_output: O,
-        main_output: torch.Tensor,
+        output: O,
     ):
         self.input = input
-        self.full_output = full_output
-        self.main_output = main_output
+        self.output = output
 
 class GeneralEvalResult(typing.Generic[O, T]):
     def __init__(
         self,
-        full_output: O,
-        main_output: torch.Tensor,
+        output: O,
         prediction: T,
         confidence: float,
     ):
-        self.full_output = full_output
-        self.main_output = main_output
+        self.output = output
         self.prediction = prediction
         self.confidence = confidence
 
@@ -537,12 +531,10 @@ class BatchInOutParams(typing.Generic[I, O]):
     def __init__(
         self,
         input: I,
-        full_output: O,
-        output: torch.Tensor,
+        output: O,
         target: torch.Tensor,
     ):
         self.input = input
-        self.full_output = full_output
         self.output = output
         self.target = target
 

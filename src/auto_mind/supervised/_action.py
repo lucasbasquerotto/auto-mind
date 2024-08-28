@@ -1,5 +1,4 @@
 # ruff: noqa: E741 (ambiguous variable name)
-# pylint: disable=too-many-lines
 import time
 import math
 import typing
@@ -10,13 +9,12 @@ from torch.utils.data import DataLoader
 from auto_mind.supervised._action_data import (
     BaseResult, TestResult, TrainResult, ExecutionCursor, EarlyStopper,
     TrainEarlyStopper, TrainEpochInfo, TrainBatchInfo, TrainParams,
-    TestParams, Scheduler, BatchInOutParams, EvalParams,
-    FullState, EvalState, GeneralHookParams)
+    TestParams, Scheduler, BatchInOutParams, EvalParams, GeneralHookParams)
 from auto_mind.supervised._action_handlers import (
     BatchExecutor, BatchAccuracyCalculator, BatchExecutorParams, BatchAccuracyParams,
     MetricsCalculator, MetricsCalculatorInputParams, MetricsCalculatorParams,
     AbortedException)
-from auto_mind.supervised._state_handlers import StateHandler
+from auto_mind.supervised._state_handlers import StateHandler, StateWithMetrics
 from auto_mind.supervised._batch_handlers import (
     BatchHandlerData, MetricsHandler, BatchHandler, BatchHandlerResult,
     TrainBatchHandler, TestBatchHandler, BatchHandlerRunParams)
@@ -40,44 +38,37 @@ AWP = typing.TypeVar("AWP")
 AWS = typing.TypeVar("AWS")
 
 ####################################################
-################## Action Wrapper ##################
+############### General Action Impl ################
 ####################################################
 
-class ActionWrapperActionParams(typing.Generic[AWP, AWS]):
+class GeneralAction(typing.Generic[I, O, MT]):
     def __init__(
         self,
-        main_params: AWP,
-        full_state: AWS | None,
-        epoch: int,
-        batch_handler: BatchHandler,
+        random_seed: int | None,
+        use_best: bool,
+        executor: BatchExecutor[I, O],
+        accuracy_calculator: BatchAccuracyCalculator[I, O] | None,
+        metrics_handler: MetricsHandler[I, O, MT] | None,
+        metrics_calculator: MetricsCalculator | None = None,
     ):
-        self.main_params = main_params
-        self.full_state = full_state
-        self.epoch = epoch
-        self.batch_handler = batch_handler
+        main_state_handler = StateHandler[
+            TrainParams[I, O, MT],
+            TestParams[I, O, MT],
+        ](use_best=use_best)
 
-class ActionWrapper(typing.Generic[ATR, ATE]):
-    def __init__(
-        self,
-        state_handler: StateHandler[ATR, ATE],
-        train_epoch: typing.Callable[
-            [ActionWrapperActionParams[ATR, FullState]],
-            BatchHandlerResult],
-        validate: typing.Callable[
-            [ActionWrapperActionParams[ATR, FullState]],
-            BatchHandlerResult | None
-        ] | None,
-        test_inner: typing.Callable[
-            [ActionWrapperActionParams[ATE, EvalState]],
-            BatchHandlerResult | None
-        ] | None,
-        metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any] | None,
-    ):
-        self.state_handler = state_handler
-        self.train_epoch = train_epoch
-        self.validate = validate
-        self.test_inner = test_inner
+        def load_eval_state(params: EvalParams) -> None:
+            main_state_handler.load_eval_state(params)
+
+        self.load_eval_state = load_eval_state
+        self.state_handler = main_state_handler
         self.metrics_handler = metrics_handler
+        self.metrics_calculator = metrics_calculator
+        self.random_seed = random_seed
+        self.executor = executor
+        self.accuracy_calculator = accuracy_calculator
+
+    def info(self, save_path: str) -> StateWithMetrics | None:
+        return self.state_handler.info(save_path=save_path)
 
     def can_run(self, early_stopper: EarlyStopper | None) -> bool:
         if not early_stopper:
@@ -85,7 +76,8 @@ class ActionWrapper(typing.Generic[ATR, ATE]):
 
         return not early_stopper.check()
 
-    def _new_train_result(self) -> TrainResult:
+    def _new_train_result(self, params: ATR) -> TrainResult:
+        validate = params.validation_dataloader is not None
         return TrainResult(
             epoch=0,
             early_stopped=False,
@@ -113,14 +105,17 @@ class ActionWrapper(typing.Generic[ATR, ATE]):
             losses=[],
             times=[],
             metrics=[] if self.metrics_handler else None,
-            val_accuracies=[] if self.validate else None,
-            val_losses=[] if self.validate else None,
-            val_times=[] if self.validate else None,
-            val_metrics=[] if self.validate and self.metrics_handler else None)
+            val_accuracies=[] if validate else None,
+            val_losses=[] if validate else None,
+            val_times=[] if validate else None,
+            val_metrics=[] if validate and self.metrics_handler else None)
 
     def train(self, params: ATR) -> TrainResult | None:
         full_state, _ = self.state_handler.load_train_state(params)
-        results: TrainResult = full_state.train_results if full_state else self._new_train_result()
+        results: TrainResult = (
+            full_state.train_results
+            if full_state
+            else self._new_train_result(params))
 
         try:
             if (not results) or (not results.early_stopped):
@@ -144,9 +139,15 @@ class ActionWrapper(typing.Generic[ATR, ATE]):
         metric_every = params.metric_every
         early_stopper = params.early_stopper
         get_epoch_info = params.get_epoch_info or default_epoch_info
+        train_dataloader = params.train_dataloader
+        validation_dataloader = params.validation_dataloader
+        validate = validation_dataloader is not None
 
         full_state, state_dict = self.state_handler.load_train_state(params)
-        results: TrainResult = full_state.train_results if full_state else self._new_train_result()
+        results: TrainResult = (
+            full_state.train_results
+            if full_state
+            else self._new_train_result(params))
         start_epoch = results.epoch + 1
 
         print_count = 0
@@ -198,7 +199,7 @@ class ActionWrapper(typing.Generic[ATR, ATE]):
             results.last_val_accuracy = val_accuracy
             results.last_val_metrics = val_metrics
 
-            if not self.validate:
+            if not validate:
                 results.last_loss = train_loss
                 results.last_accuracy = train_accuracy
                 results.last_metrics = train_metrics
@@ -286,14 +287,26 @@ class ActionWrapper(typing.Generic[ATR, ATE]):
                     metrics_handler=metrics_handler,
                     get_batch_info=get_batch_info)
 
-                train_params = ActionWrapperActionParams(
-                    main_params=params,
-                    full_state=full_state,
-                    epoch=epoch,
-                    batch_handler=batch_handler)
-
                 with torch.set_grad_enabled(True):
-                    result = self.train_epoch(train_params)
+                    result = GeneralActionRunner(
+                        train=True,
+                        batch_handler=batch_handler,
+                        dataloader=train_dataloader,
+                        hook=params.train_hook,
+                        model=params.model,
+                        optimizer=params.optimizer,
+                        scheduler=(
+                            None
+                            if params.validation_dataloader
+                            is not None else params.scheduler),
+                        criterion=params.criterion,
+                        step_only_on_accuracy_loss=params.step_only_on_accuracy_loss,
+                        clip_grad_max=params.clip_grad_max,
+                        epoch=epoch,
+                        random_seed=self.random_seed,
+                        executor=self.executor,
+                        accuracy_calculator=self.accuracy_calculator,
+                    ).run()
 
                 train_loss = result.total_loss
                 train_accuracy = result.total_accuracy
@@ -324,7 +337,7 @@ class ActionWrapper(typing.Generic[ATR, ATE]):
 
                 val_result = None
 
-                if not self.validate:
+                if not validate:
                     if params.early_stopper and isinstance(params.early_stopper, TrainEarlyStopper):
                         params.early_stopper.update_epoch(
                             loss=train_loss,
@@ -342,14 +355,24 @@ class ActionWrapper(typing.Generic[ATR, ATE]):
                         metrics_handler=metrics_handler,
                         get_batch_info=get_batch_info)
 
-                    val_params = ActionWrapperActionParams(
-                        main_params=params,
-                        full_state=full_state,
-                        epoch=epoch,
-                        batch_handler=batch_handler)
-
                     with torch.set_grad_enabled(False):
-                        val_result = self.validate(val_params)
+                        assert validation_dataloader is not None
+                        val_result = GeneralActionRunner(
+                            train=False,
+                            batch_handler=batch_handler,
+                            dataloader=validation_dataloader,
+                            hook=params.validation_hook,
+                            model=params.model,
+                            optimizer=None,
+                            scheduler=params.scheduler,
+                            criterion=params.criterion,
+                            step_only_on_accuracy_loss=params.step_only_on_accuracy_loss,
+                            clip_grad_max=None,
+                            epoch=epoch,
+                            random_seed=self.random_seed,
+                            executor=self.executor,
+                            accuracy_calculator=self.accuracy_calculator,
+                        ).run()
 
                     if val_result:
                         val_loss = val_result.total_loss
@@ -531,8 +554,8 @@ class ActionWrapper(typing.Generic[ATR, ATE]):
 
         get_batch_info = params.get_batch_info if params.get_batch_info else default_batch_info
 
-        if not self.test_inner:
-            raise Exception('test_inner is not defined')
+        test_dataloader = params.dataloader
+        assert test_dataloader is not None, 'the test dataloader is empty'
 
         if not self.can_run(early_stopper):
             raise AbortedException()
@@ -571,14 +594,23 @@ class ActionWrapper(typing.Generic[ATR, ATE]):
                 metrics_handler=metrics_handler,
                 get_batch_info=get_batch_info)
 
-            test_params = ActionWrapperActionParams(
-                main_params=params,
-                full_state=test_state,
-                epoch=epoch,
-                batch_handler=batch_handler)
-
             with torch.set_grad_enabled(False):
-                result = self.test_inner(test_params)
+                result = GeneralActionRunner(
+                    train=False,
+                    batch_handler=batch_handler,
+                    dataloader=test_dataloader,
+                    hook=params.hook,
+                    model=params.model,
+                    optimizer=None,
+                    scheduler=None,
+                    criterion=params.criterion,
+                    step_only_on_accuracy_loss=False,
+                    clip_grad_max=None,
+                    epoch=epoch,
+                    random_seed=self.random_seed,
+                    executor=self.executor,
+                    accuracy_calculator=self.accuracy_calculator,
+                ).run()
 
             if result:
                 loss = result.total_loss
@@ -611,103 +643,18 @@ class ActionWrapper(typing.Generic[ATR, ATE]):
 
         return test_results
 
-####################################################
-############### General Action Impl ################
-####################################################
-
-class GeneralAction(typing.Generic[I, O, MT]):
-    def __init__(
-        self,
-        random_seed: int | None,
-        use_best: bool,
-        executor: BatchExecutor[I, O],
-        accuracy_calculator: BatchAccuracyCalculator[I, O] | None,
-        metrics_handler: MetricsHandler[I, O, MT] | None,
-        metrics_calculator: MetricsCalculator | None = None,
-    ):
-        main_state_handler = StateHandler[
-            TrainParams[I, O, MT],
-            TestParams[I, O, MT],
-        ](use_best=use_best)
-
-        action_wrapper = ActionWrapper(
-            state_handler=main_state_handler,
-            train_epoch=lambda params: GeneralActionRunner(
-                train=True,
-                batch_handler=params.batch_handler,
-                dataloader=params.main_params.train_dataloader,
-                hook=params.main_params.train_hook,
-                model=params.main_params.model,
-                optimizer=params.main_params.optimizer,
-                scheduler=(
-                    None
-                    if params.main_params.validation_dataloader
-                    is not None else params.main_params.scheduler),
-                criterion=params.main_params.criterion,
-                step_only_on_accuracy_loss=params.main_params.step_only_on_accuracy_loss,
-                clip_grad_max=params.main_params.clip_grad_max,
-                epoch=params.epoch,
-                random_seed=random_seed,
-                executor=executor,
-                accuracy_calculator=accuracy_calculator,
-            ).run(),
-            validate=lambda params: GeneralActionRunner(
-                train=False,
-                batch_handler=params.batch_handler,
-                dataloader=params.main_params.validation_dataloader,
-                hook=params.main_params.validation_hook,
-                model=params.main_params.model,
-                optimizer=None,
-                scheduler=params.main_params.scheduler,
-                criterion=params.main_params.criterion,
-                step_only_on_accuracy_loss=params.main_params.step_only_on_accuracy_loss,
-                clip_grad_max=None,
-                epoch=params.epoch,
-                random_seed=random_seed,
-                executor=executor,
-                accuracy_calculator=accuracy_calculator,
-            ).run() if params.main_params.validation_dataloader is not None else None,
-            test_inner=lambda params: GeneralActionRunner(
-                train=False,
-                batch_handler=params.batch_handler,
-                dataloader=params.main_params.dataloader,
-                hook=params.main_params.hook,
-                model=params.main_params.model,
-                optimizer=None,
-                scheduler=None,
-                criterion=params.main_params.criterion,
-                step_only_on_accuracy_loss=False,
-                clip_grad_max=None,
-                epoch=params.epoch,
-                random_seed=random_seed,
-                executor=executor,
-                accuracy_calculator=accuracy_calculator,
-            ).run(),
-            metrics_handler=metrics_handler,
-        )
-
-        def load_eval_state(params: EvalParams) -> None:
-            main_state_handler.load_eval_state(params)
-
-        self.train = action_wrapper.train
-        self.test = action_wrapper.test
-        self.info = main_state_handler.info
-        self.load_eval_state = load_eval_state
-        self.main_state_handler = main_state_handler
-        self.metrics_calculator = metrics_calculator
-
     def calculate_metrics(
         self,
         params: MetricsCalculatorInputParams,
     ) -> dict[str, typing.Any] | None:
-        main_state_handler = self.main_state_handler
+        state_handler = self.state_handler
         metrics_calculator = self.metrics_calculator
         save_path = params.save_path
 
         if not metrics_calculator or not save_path:
             return None
 
-        info = main_state_handler.load_state_with_metrics(save_path=save_path)
+        info = state_handler.load_state_with_metrics(save_path=save_path)
 
         if not info:
             return None
@@ -715,15 +662,15 @@ class GeneralAction(typing.Generic[I, O, MT]):
         calc_params = MetricsCalculatorParams(info=info, model=params.model)
         metrics = metrics_calculator.run(calc_params)
 
-        main_state_handler.save_metrics(metrics, save_path=save_path)
+        state_handler.save_metrics(metrics, save_path=save_path)
 
         return metrics
 
     def define_as_pending(self, save_path: str) -> None:
-        self.main_state_handler.define_as_completed(completed=False, save_path=save_path)
+        self.state_handler.define_as_completed(completed=False, save_path=save_path)
 
     def define_as_completed(self, save_path: str) -> None:
-        self.main_state_handler.define_as_completed(completed=True, save_path=save_path)
+        self.state_handler.define_as_completed(completed=True, save_path=save_path)
 
 class GeneralActionRunner(typing.Generic[I, O, T]):
     def __init__(
@@ -743,8 +690,6 @@ class GeneralActionRunner(typing.Generic[I, O, T]):
         accuracy_calculator: BatchAccuracyCalculator[I, O] | None,
         batch_handler: BatchHandler,
     ):
-        last_output: O | None = None
-
         self.train = train
         self.dataloader = dataloader
         self.hook = hook
@@ -760,8 +705,6 @@ class GeneralActionRunner(typing.Generic[I, O, T]):
         self.accuracy_calculator = accuracy_calculator
         self.batch_handler = batch_handler
         self.best_accuracy = batch_handler.best_accuracy
-
-        self.last_output = last_output
 
     def run_batch(
         self,
@@ -793,18 +736,14 @@ class GeneralActionRunner(typing.Generic[I, O, T]):
         # call the model with the input and retrieve the output
         executor_params = BatchExecutorParams(
             model=model,
-            input=input_batch,
-            last_output=self.last_output)
-        full_output = executor.run(executor_params)
-        output = executor.main_output(full_output)
-        self.last_output = full_output
+            input=input_batch)
+        output = executor.run(executor_params)
 
         if isinstance(criterion, nn.Module):
             loss: torch.Tensor = criterion(output, target_batch)
         else:
             loss_params = BatchInOutParams(
                 input=input_batch,
-                full_output=full_output,
                 output=output,
                 target=target_batch)
             loss = criterion(loss_params)
@@ -829,7 +768,6 @@ class GeneralActionRunner(typing.Generic[I, O, T]):
             if accuracy_calculator is not None:
                 accuracy_params = BatchAccuracyParams(
                     input=input_batch,
-                    full_output=full_output,
                     output=output,
                     target=target_batch)
                 batch_accuracy = accuracy_calculator.run(accuracy_params)
@@ -845,15 +783,13 @@ class GeneralActionRunner(typing.Generic[I, O, T]):
                     accuracy=batch_accuracy,
                     target=target_batch,
                     input=input_batch,
-                    output=output,
-                    full_output=self.last_output))
+                    output=output))
 
         return BatchHandlerData(
             amount=current_amount,
             loss=loss_value,
             accuracy=batch_accuracy,
             input=input_batch,
-            full_output=full_output,
             output=output,
             target=target_batch)
 
@@ -871,8 +807,6 @@ class GeneralActionRunner(typing.Generic[I, O, T]):
                 raise Exception('optimizer is not defined')
         else:
             model.eval()
-
-        self.last_output = None
 
         result = self.batch_handler.run(
             dataloader=self.dataloader,

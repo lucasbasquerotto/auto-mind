@@ -103,56 +103,40 @@ class OptimizerChain(optim.Optimizer):
 ####### Executors, Calculators & Evaluators ########
 ####################################################
 
-class BatchExecutorParams(typing.Generic[I, O]):
+class BatchExecutorParams(typing.Generic[I]):
     def __init__(
         self,
         model: nn.Module,
         input: I,
-        last_output: O | None,
     ):
         self.model = model
         self.input = input
-        self.last_output = last_output
 
 class BatchExecutor(typing.Generic[I, O]):
-    def run(self, params: BatchExecutorParams[I, O]) -> O:
-        raise NotImplementedError
-
-    def main_output(self, output: O) -> Tensor:
+    def run(self, params: BatchExecutorParams[I]) -> O:
         raise NotImplementedError
 
 class GeneralBatchExecutor(BatchExecutor[Tensor, Tensor]):
-    def run(self, params: BatchExecutorParams[Tensor, Tensor]) -> Tensor:
+    def run(self, params: BatchExecutorParams[Tensor]) -> Tensor:
         result: Tensor = params.model(params.input)
         return result
 
-    def main_output(self, output: Tensor) -> Tensor:
-        return output
-
 class BatchAccuracyParams(BatchInOutParams[I, O], typing.Generic[I, O]):
-    def __init__(
-        self,
-        input: I,
-        full_output: O,
-        output: Tensor,
-        target: Tensor,
-    ):
-        super().__init__(
-            input=input,
-            full_output=full_output,
-            output=output,
-            target=target)
+    pass
 
 class BatchAccuracyCalculator(typing.Generic[I, O]):
     def run(self, params: BatchAccuracyParams[I, O]) -> float:
         raise NotImplementedError
 
-class GeneralBatchAccuracyCalculator(BatchAccuracyCalculator[I, O], typing.Generic[I, O]):
-    def run(self, params: BatchAccuracyParams[I, O]) -> float:
+class GeneralBatchAccuracyCalculator(BatchAccuracyCalculator[I, torch.Tensor], typing.Generic[I]):
+    def run(self, params: BatchAccuracyParams[I, torch.Tensor]) -> float:
         return (params.output.argmax(dim=1) == params.target).sum().item() / params.target.shape[0]
 
-class MultiLabelBatchAccuracyCalculator(BatchAccuracyCalculator[I, O], typing.Generic[I, O]):
-    def run(self, params: BatchAccuracyParams[I, O]) -> float:
+class MultiLabelBatchAccuracyCalculator(
+    BatchAccuracyCalculator[I, torch.Tensor],
+    typing.Generic[I],
+):
+    def run(self, params: BatchAccuracyParams[I, torch.Tensor]) -> float:
         # params.output shape: [batch, classes]
         # params.target shape: [batch, classes]
         # for each item compare how close they are, with value 1 if they are the same,
@@ -164,7 +148,7 @@ class MultiLabelBatchAccuracyCalculator(BatchAccuracyCalculator[I, O], typing.Ge
         result: float = grouped.sum().item() / grouped.shape[0]
         return result
 
-class ValueBatchAccuracyCalculator(BatchAccuracyCalculator[I, O], typing.Generic[I, O]):
+class ValueBatchAccuracyCalculator(BatchAccuracyCalculator[I, torch.Tensor], typing.Generic[I]):
     """
     Calculates the accuracy of the output values in relation to the targets for continuous values.
 
@@ -188,7 +172,7 @@ class ValueBatchAccuracyCalculator(BatchAccuracyCalculator[I, O], typing.Generic
         self.error_margin = error_margin
         self.epsilon = epsilon
 
-    def run(self, params: BatchAccuracyParams[I, O]) -> float:
+    def run(self, params: BatchAccuracyParams[I, torch.Tensor]) -> float:
         range_tensor = self.error_margin*params.target.abs() + self.epsilon
 
         # calculate the absolute difference between output and target
@@ -256,8 +240,7 @@ class LambdaOutputEvaluator(OutputEvaluator[I, O, T], typing.Generic[I, O, T]):
         prediction = self.fn(params)
         confidence = self.fn_confidence(params) if self.fn_confidence else 0.0
         return GeneralEvalResult(
-            full_output=params.full_output,
-            main_output=params.main_output,
+            output=params.output,
             prediction=prediction,
             confidence=confidence)
 
@@ -265,18 +248,18 @@ class NoOutputEvaluator(LambdaOutputEvaluator[I, O, None], typing.Generic[I, O])
     def __init__(self) -> None:
         super().__init__(lambda _: None)
 
-class DefaultEvaluator(Evaluator[I, GeneralEvalResult[O, T]], typing.Generic[I, O, T]):
+class DefaultEvaluator(Evaluator[I, GeneralEvalResult[torch.Tensor, T]], typing.Generic[I, T]):
     def __init__(
         self,
-        executor: BatchExecutor[I, O],
-        output_evaluator: OutputEvaluator[I, O, T],
+        executor: BatchExecutor[I, torch.Tensor],
+        output_evaluator: OutputEvaluator[I, torch.Tensor, T],
         random_mode: bool = False,
     ) -> None:
         self.executor = executor
         self.output_evaluator = output_evaluator
         self.random_mode = random_mode
 
-    def run(self, params: EvaluatorParams[I]) -> GeneralEvalResult[O, T]:
+    def run(self, params: EvaluatorParams[I]) -> GeneralEvalResult[torch.Tensor, T]:
         model = params.model
         input = params.input
 
@@ -289,37 +272,33 @@ class DefaultEvaluator(Evaluator[I, GeneralEvalResult[O, T]], typing.Generic[I, 
         else:
             model.eval()
 
-        last_output: O | None = None
         executor_params = BatchExecutorParams(
             model=model,
-            input=input,
-            last_output=last_output)
-        full_output = executor.run(executor_params)
-        output = executor.main_output(full_output)
+            input=input)
+        output = executor.run(executor_params)
 
         default_result = GeneralEvalBaseResult(
             input=input,
-            full_output=full_output,
-            main_output=output)
+            output=output)
 
         result = output_evaluator.run(default_result)
 
         return result
 
-    def confidence(self, params: GeneralEvalBaseResult[I, O]) -> float:
+    def confidence(self, params: GeneralEvalBaseResult[I, torch.Tensor]) -> float:
         raise NotImplementedError
 
     @classmethod
-    def single_result(cls, params: GeneralEvalBaseResult[I, O]) -> list[float]:
-        out_data: list[float] = list(params.main_output.detach().numpy()[0])
+    def single_result(cls, params: GeneralEvalBaseResult[I, torch.Tensor]) -> list[float]:
+        out_data: list[float] = list(params.output.detach().numpy()[0])
         return out_data
 
-class EvaluatorWithSimilarity(DefaultEvaluator[I, O, T], typing.Generic[I, O, T, P]):
+class EvaluatorWithSimilarity(DefaultEvaluator[I, T], typing.Generic[I, T, P]):
     def similarity(self, predicted: P, expected: P) -> float:
         raise NotImplementedError
 
 class MaxProbEvaluator(
-    EvaluatorWithSimilarity[I, torch.Tensor, tuple[float, int], int],
+    EvaluatorWithSimilarity[I, tuple[float, int], int],
     typing.Generic[I],
 ):
     def __init__(
@@ -348,7 +327,7 @@ class MaxProbEvaluator(
         return 1.0 if predicted == expected else 0.0
 
 class MaxProbBatchEvaluator(
-    EvaluatorWithSimilarity[I, torch.Tensor, list[tuple[float, int]], int],
+    EvaluatorWithSimilarity[I, list[tuple[float, int]], int],
     typing.Generic[I],
 ):
     def __init__(
@@ -364,7 +343,7 @@ class MaxProbBatchEvaluator(
             random_mode=random_mode)
 
     def evaluate(self, params: GeneralEvalBaseResult[I, torch.Tensor]) -> list[tuple[float, int]]:
-        out = params.main_output.detach().numpy()
+        out = params.output.detach().numpy()
         return [(out[i][argmax], argmax) for i, argmax in enumerate(np.argmax(out, axis=1))]
 
     def confidence(self, params: GeneralEvalBaseResult[I, torch.Tensor]) -> float:
@@ -376,7 +355,7 @@ class MaxProbBatchEvaluator(
         return 1.0 if predicted == expected else 0.0
 
 class AllProbsEvaluator(
-    EvaluatorWithSimilarity[I, torch.Tensor, list[float], list[float]],
+    EvaluatorWithSimilarity[I, list[float], list[float]],
     typing.Generic[I],
 ):
     def __init__(
@@ -415,7 +394,7 @@ class AllProbsEvaluator(
         return float(similarity.mean())
 
 class ValuesEvaluator(
-    EvaluatorWithSimilarity[I, torch.Tensor, list[float], list[float]],
+    EvaluatorWithSimilarity[I, list[float], list[float]],
     typing.Generic[I],
 ):
     def __init__(

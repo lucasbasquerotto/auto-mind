@@ -41,15 +41,13 @@ class BatchHandlerData(typing.Generic[I, O]):
         loss: float,
         accuracy: float | None,
         input: I,
-        full_output: O,
-        output: torch.Tensor,
+        output: O,
         target: torch.Tensor,
     ):
         self.amount = amount
         self.loss = loss
         self.accuracy = accuracy
         self.input = input
-        self.full_output = full_output
         self.output = output
         self.target = target
 
@@ -60,7 +58,6 @@ class MetricsHandlerInput(BatchHandlerData[I, O], typing.Generic[I, O]):
             loss=out.loss,
             accuracy=out.accuracy,
             input=out.input,
-            full_output=out.full_output,
             output=out.output,
             target=out.target)
 
