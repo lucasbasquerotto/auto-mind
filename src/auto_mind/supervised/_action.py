@@ -9,14 +9,12 @@ from torch import optim
 from torch.utils.data import DataLoader
 from auto_mind.supervised._action_data import (
     BaseResult, TestResult, TrainResult, ExecutionCursor, EarlyStopper,
-    TrainEarlyStopper, TrainEpochInfo, TrainBatchInfo, MinimalTrainParams,
-    MinimalTestParams, MinimalFullState, Scheduler, BatchInOutParams,
-    SingleModelMinimalEvalParams)
+    TrainEarlyStopper, TrainEpochInfo, TrainBatchInfo, TrainParams,
+    TestParams, Scheduler, BatchInOutParams, EvalParams,
+    FullState, EvalState, GeneralHookParams)
 from auto_mind.supervised._action_handlers import (
-    AbortedException, StateHandler, BatchExecutor, BatchAccuracyCalculator,
-    MetricsCalculator, SingleModelStateHandler, GeneralTrainParams,
-    GeneralTestParams, MetricsCalculatorInputParams,
-    MetricsCalculatorParams, GeneralHookParams,
+    StateHandler, BatchExecutor, BatchAccuracyCalculator,
+    MetricsCalculator, MetricsCalculatorInputParams, MetricsCalculatorParams,
     BatchExecutorParams, BatchAccuracyParams)
 
 I = typing.TypeVar("I")
@@ -29,16 +27,16 @@ MT = typing.TypeVar("MT")
 
 S = typing.TypeVar("S", bound=BaseResult)
 
-INF = typing.TypeVar("INF")
-ATR = typing.TypeVar(
-    "ATR",
-    bound=MinimalTrainParams[typing.Any, typing.Any, typing.Any, typing.Any])
-ATE = typing.TypeVar("ATE", bound=MinimalTestParams[typing.Any])
-STR = typing.TypeVar("STR", bound=MinimalFullState)
-STE = typing.TypeVar("STE", bound=MinimalFullState)
+ATR = typing.TypeVar("ATR", bound=TrainParams[
+    typing.Any, typing.Any, typing.Any])
+ATE = typing.TypeVar("ATE", bound=TestParams[
+    typing.Any, typing.Any, typing.Any])
 
 AWP = typing.TypeVar("AWP")
 AWS = typing.TypeVar("AWS")
+
+class AbortedException(Exception):
+    pass
 
 ####################################################
 ################## Batch Handlers ##################
@@ -808,17 +806,19 @@ class ActionWrapperActionParams(typing.Generic[AWP, AWS]):
         self.epoch = epoch
         self.batch_handler = batch_handler
 
-class ActionWrapper(typing.Generic[INF, ATR, STR, ATE, STE]):
+class ActionWrapper(typing.Generic[ATR, ATE]):
     def __init__(
         self,
-        state_handler: StateHandler[INF, ATR, STR, ATE, STE],
-        train_epoch: typing.Callable[[ActionWrapperActionParams[ATR, STR]], BatchHandlerResult],
+        state_handler: StateHandler[ATR, ATE],
+        train_epoch: typing.Callable[
+            [ActionWrapperActionParams[ATR, FullState]],
+            BatchHandlerResult],
         validate: typing.Callable[
-            [ActionWrapperActionParams[ATR, STR]],
+            [ActionWrapperActionParams[ATR, FullState]],
             BatchHandlerResult | None
         ] | None,
         test_inner: typing.Callable[
-            [ActionWrapperActionParams[ATE, STE]],
+            [ActionWrapperActionParams[ATE, EvalState]],
             BatchHandlerResult | None
         ] | None,
         metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any] | None,
@@ -1373,9 +1373,9 @@ class GeneralAction(typing.Generic[I, O, MT]):
         metrics_handler: MetricsHandler[I, O, MT] | None,
         metrics_calculator: MetricsCalculator | None = None,
     ):
-        main_state_handler = SingleModelStateHandler[
-            GeneralTrainParams[I, O, MT],
-            GeneralTestParams[I, O, MT],
+        main_state_handler = StateHandler[
+            TrainParams[I, O, MT],
+            TestParams[I, O, MT],
         ](use_best=use_best)
 
         action_wrapper = ActionWrapper(
@@ -1434,7 +1434,7 @@ class GeneralAction(typing.Generic[I, O, MT]):
             metrics_handler=metrics_handler,
         )
 
-        def load_eval_state(params: SingleModelMinimalEvalParams) -> None:
+        def load_eval_state(params: EvalParams) -> None:
             main_state_handler.load_eval_state(params)
 
         self.train = action_wrapper.train

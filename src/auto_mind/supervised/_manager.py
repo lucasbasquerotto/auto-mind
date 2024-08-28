@@ -7,13 +7,12 @@ from torch import nn
 from torch.utils.data import DataLoader
 from auto_mind.supervised._dataset import DatasetGroup
 from auto_mind.supervised._action_data import (
-    Scheduler, EarlyStopper, SingleModelMinimalEvalParams, TrainEpochInfo,
-    TrainBatchInfo, TrainResult, TestResult, BatchInOutParams)
+    Scheduler, EarlyStopper, EvalParams, TrainEpochInfo,
+    TrainBatchInfo, TrainResult, TestResult, BatchInOutParams, GeneralHookParams,
+    TrainParams, TestParams)
 from auto_mind.supervised._action_handlers import (
-    GeneralHookParams, GeneralTestParams,
-    GeneralTrainParams, BatchAccuracyCalculator, BatchExecutor,
-    Evaluator, EvaluatorParams, MetricsCalculatorInputParams,
-    MetricsCalculator)
+    BatchAccuracyCalculator, BatchExecutor, Evaluator, EvaluatorParams,
+    MetricsCalculatorInputParams, MetricsCalculator)
 from auto_mind.supervised._action import MetricsHandler, GeneralAction
 
 I = typing.TypeVar("I")
@@ -333,7 +332,7 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
 
         action = self.action
 
-        train_params = GeneralTrainParams(
+        train_params = TrainParams(
             train_dataloader=train_dataloader,
             validation_dataloader=validation_dataloader,
             model=model,
@@ -378,7 +377,7 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
         if test_dataloader is None:
             raise Exception('The test test dataloader is not defined')
 
-        test_params = GeneralTestParams(
+        test_params = TestParams(
             dataloader=test_dataloader,
             model=model,
             criterion=criterion,
@@ -408,7 +407,7 @@ class Manager(typing.Generic[I, O, M, EI, EO]):
     def load_model(self) -> nn.Module:
         model = self.model
         if self.save_path:
-            params = SingleModelMinimalEvalParams(
+            params = EvalParams(
                 model=model,
                 save_path=self.save_path)
             self.action.load_eval_state(params)

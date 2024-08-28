@@ -4,12 +4,12 @@ import typing
 import warnings
 import torch
 import numpy as np
-from torch import Tensor, nn
+from torch import Tensor, optim, nn
 from auto_mind.supervised._action_data import (
-    MinimalHookParams, SingleModelMinimalEvalParams, MinimalStateWithMetrics,
-    SingleModelTestParams, SingleModelTrainParams, BatchInOutParams, BaseResult,
-    MinimalEvalParams, MinimalFullState, MinimalTrainParams, SingleModelEvalState,
-    SingleModelFullState, TestResult, TrainResult, MinimalTestParams)
+    GeneralEvalBaseResult, GeneralEvalResult, EvalParams,
+    TestParams, TrainParams, BatchInOutParams, BaseResult,
+    MinimalEvalParams, EvalState, FullState, TestResult,
+    TrainResult, StateWithMetrics, EarlyStopper, TrainEarlyStopper)
 
 I = typing.TypeVar('I')
 O = typing.TypeVar('O')
@@ -22,74 +22,85 @@ EO = typing.TypeVar("EO")
 S = typing.TypeVar("S", bound=BaseResult)
 
 ####################################################
-################## General Action ##################
+############# Default Implementations ##############
 ####################################################
 
-class GeneralHookParams(MinimalHookParams, typing.Generic[I, O]):
-    def __init__(
-            self,
-            epoch: int,
-            batch: int,
-            current_amount: int,
-            loss: float,
-            accuracy: float | None,
-            target: Tensor,
-            input: I,
-            full_output: O | None,
-            output: Tensor):
+class ChainedEarlyStopper(TrainEarlyStopper[MT], typing.Generic[MT]):
+    def __init__(self, stoppers: list[EarlyStopper]):
+        self.stoppers = stoppers
 
-        super().__init__(
-            current_amount=current_amount,
-            loss=loss,
-            accuracy=accuracy)
+    def check(self) -> bool:
+        if self.check_finish():
+            return True
+        return any(stopper.check() for stopper in self.stoppers)
 
-        self.epoch = epoch
-        self.batch = batch
-        self.target = target
-        self.input = input
-        self.output = output
-        self.full_output = full_output
+    def check_finish(self) -> bool:
+        return (
+            any(stopper.check_finish()
+            for stopper in self.stoppers
+            if isinstance(stopper, TrainEarlyStopper)))
 
-class GeneralEvalBaseResult(typing.Generic[I, O]):
-    def __init__(
-        self,
-        input: I,
-        full_output: O,
-        main_output: Tensor,
-    ):
-        self.input = input
-        self.full_output = full_output
-        self.main_output = main_output
+    def update_epoch(self, loss: float, accuracy: float | None, metrics: MT | None) -> None:
+        for stopper in self.stoppers:
+            if isinstance(stopper, TrainEarlyStopper):
+                stopper.update_epoch(loss=loss, accuracy=accuracy, metrics=metrics)
 
-class GeneralEvalResult(typing.Generic[O, T]):
-    def __init__(self, full_output: O, main_output: Tensor, prediction: T, confidence: float):
-        self.full_output = full_output
-        self.main_output = main_output
-        self.prediction = prediction
-        self.confidence = confidence
+    def state_dict(self) -> dict[str, typing.Any]:
+        return dict(stoppers=[stopper.state_dict() for stopper in self.stoppers])
 
-class GeneralTrainParams(
-    SingleModelTrainParams[
-        I,
-        O,
-        GeneralHookParams[I, O],
-        GeneralHookParams[I, O],
-        MT,
-    ],
-    typing.Generic[I, O, MT],
-):
-    pass
+    def load_state_dict(self, state_dict: dict[str, typing.Any]) -> typing.Self:
+        for i, stopper in enumerate(self.stoppers):
+            stopper.load_state_dict(state_dict['stoppers'][i])
+        return self
 
-class GeneralTestParams(
-    SingleModelTestParams[
-        I,
-        O,
-        GeneralHookParams[I, O],
-        MT,
-    ],
-    typing.Generic[I, O, MT],
-):
-    pass
+class AccuracyEarlyStopper(TrainEarlyStopper[MT], typing.Generic[MT]):
+    def __init__(self, min_accuracy: float, patience: int = 5):
+        self.patience = patience
+        self.min_accuracy = min_accuracy
+        self.amount = 0
+
+    def check_finish(self) -> bool:
+        return self.amount >= self.patience
+
+    def update_epoch(self, loss: float, accuracy: float | None, metrics: MT | None) -> None:
+        if accuracy is None:
+            self.amount = 0
+        elif accuracy < self.min_accuracy:
+            self.amount = 0
+        else:
+            self.amount += 1
+
+    def state_dict(self) -> dict[str, typing.Any]:
+        parent = super().state_dict()
+        return dict(amount=self.amount, parent=parent)
+
+    def load_state_dict(self, state_dict: dict[str, typing.Any]) -> typing.Self:
+        self.amount = state_dict.get('amount', 0)
+        super().load_state_dict(state_dict.get('parent', {}))
+        return self
+
+class OptimizerChain(optim.Optimizer):
+    def __init__(self, optimizers: list[optim.Optimizer]) -> None:
+        super().__init__(params=[], defaults=dict())
+        self.optimizers: list[optim.Optimizer] = optimizers
+
+    def zero_grad(self, set_to_none: bool = True) -> None:
+        for optimizer in self.optimizers:
+            optimizer.zero_grad(set_to_none=set_to_none)
+
+    def step(self, closure=None) -> None: # type: ignore
+        for optimizer in self.optimizers:
+            optimizer.step()
+
+    def state_dict(self) -> dict[str, typing.Any]:
+        return {
+            f'optimizer_{i}': optimizer.state_dict()
+            for i, optimizer in enumerate(self.optimizers)
+        }
+
+    def load_state_dict(self, state_dict: dict[str, typing.Any]) -> None:
+        for i, optimizer in enumerate(self.optimizers):
+            optimizer.load_state_dict(state_dict[f'optimizer_{i}'])
 
 ####################################################
 ####### Executors, Calculators & Evaluators ########
@@ -199,7 +210,7 @@ class ValueBatchAccuracyCalculator(BatchAccuracyCalculator[I, O], typing.Generic
 class MetricsCalculatorParams:
     def __init__(
         self,
-        info: MinimalStateWithMetrics,
+        info: StateWithMetrics,
         model: torch.nn.Module,
     ):
         self.info = info
@@ -464,38 +475,85 @@ class ValuesEvaluator(
 ####################################################
 
 PE = typing.TypeVar("PE", bound=MinimalEvalParams)
-INF = typing.TypeVar("INF")
-ATR = typing.TypeVar(
-    "ATR",
-    bound=MinimalTrainParams[typing.Any, typing.Any, typing.Any, typing.Any])
-ATE = typing.TypeVar("ATE", bound=MinimalTestParams[typing.Any])
-STR = typing.TypeVar("STR", bound=MinimalFullState)
-STE = typing.TypeVar("STE", bound=MinimalFullState)
+ATR = typing.TypeVar("ATR", bound=TrainParams[
+    typing.Any, typing.Any, typing.Any])
+ATE = typing.TypeVar("ATE", bound=TestParams[
+    typing.Any, typing.Any, typing.Any])
 
-class AbortedException(Exception):
-    pass
+class StateHandler(typing.Generic[ATR, ATE]):
+    def __init__(self, use_best: bool):
+        def get_eval_state(
+            params: EvalParams,
+            state_dict: dict[str, typing.Any],
+        ) -> EvalState:
+            return EvalState.from_state_dict_with_params(
+                params,
+                use_best=use_best,
+                state_dict=state_dict)
 
-class StateHandler(typing.Generic[INF, ATR, STR, ATE, STE]):
-    def __init__(
-        self,
-        info_from_dict: typing.Callable[[dict[str, typing.Any]], INF],
-        train_state_from_dict: typing.Callable[[ATR, dict[str, typing.Any]], STR | None] | None,
-        new_train_state: typing.Callable[
-            [ATR, TrainResult, dict[str, typing.Any] | None],
-            STR | None
-        ] | None,
-        test_state_from_dict: typing.Callable[[
-            ATE, dict[str, typing.Any]], STE | None] | None,
-        new_test_state: typing.Callable[
-            [ATE, TestResult, dict[str, typing.Any] | None],
-            STE | None
-        ] | None,
-    ):
+        def test_state_from_dict(
+            params: ATE,
+            state_dict: dict[str, typing.Any],
+        ) -> EvalState | None:
+            return get_eval_state(
+                params=EvalParams(
+                    model=params.model,
+                    save_path=params.save_path,
+                    skip_load_state=params.skip_load_state,
+                ),
+                state_dict=state_dict,
+            )
+
+        def info_from_dict(state_dict: dict[str, typing.Any]) -> StateWithMetrics:
+            return StateWithMetrics.from_state_dict(state_dict)
+
+        def train_state_from_dict(
+            params: ATR,
+            state_dict: dict[str, typing.Any],
+        ) -> FullState:
+            return FullState.from_state_dict_with_params(
+                params,
+                use_best=False,
+                state_dict=state_dict)
+
+        def new_train_state(
+            params: ATR,
+            train_results: TrainResult,
+            last_state_dict: dict[str, typing.Any] | None,
+        ) -> FullState:
+            return FullState(
+                model=params.model,
+                optimizer=params.optimizer,
+                scheduler=params.scheduler,
+                early_stopper=params.early_stopper,
+                train_results=train_results,
+                best_state_dict=None,
+                test_results=(
+                    TestResult.from_state_dict(last_state_dict['test_results'])
+                    if last_state_dict and last_state_dict.get('test_results')
+                    else None),
+                metrics=last_state_dict.get('metrics') if last_state_dict else None,
+            )
+
+        def new_test_state(
+            params: ATE,
+            test_results: TestResult,
+            last_state_dict: dict[str, typing.Any] | None,
+        ) -> EvalState | None:
+            return EvalState(
+                model=params.model,
+                train_results=TrainResult.from_state_dict(
+                    last_state_dict['train_results']),
+                test_results=test_results,
+                metrics=last_state_dict.get('metrics'),
+            ) if last_state_dict and last_state_dict.get('train_results') else None
+
         self._info_from_dict = info_from_dict
         self._train_state_from_dict = train_state_from_dict
         self._new_train_state = new_train_state
         self._test_state_from_dict = test_state_from_dict
         self._new_test_state = new_test_state
+        self._get_eval_state = get_eval_state
 
     def _load_state(
         self,
@@ -537,12 +595,15 @@ class StateHandler(typing.Generic[INF, ATR, STR, ATE, STE]):
                 state_dict=state_dict,
                 save_path=save_path)
 
-    def info(self, save_path: str) -> INF | None:
+    def info(self, save_path: str) -> StateWithMetrics | None:
         state_dict = _load_state_dict(save_path=save_path)
         info = self._info_from_dict(state_dict) if state_dict else None
         return info
 
-    def load_train_state(self, params: ATR) -> tuple[STR | None, dict[str, typing.Any] | None]:
+    def load_train_state(
+        self,
+        params: ATR,
+    ) -> tuple[FullState | None, dict[str, typing.Any] | None]:
         return self._load_state(params, self._train_state_from_dict)
 
     def save_train_state(
@@ -553,14 +614,17 @@ class StateHandler(typing.Generic[INF, ATR, STR, ATE, STE]):
     ) -> None:
         new_train_state = self._new_train_state
 
-        if new_train_state and params.save_path:
+        if params.save_path:
             state = new_train_state(params, result, last_state_dict)
             self._save_state(
                 params=params,
                 state=state,
                 last_state_dict=last_state_dict)
 
-    def load_test_state(self, params: ATE) -> tuple[STE | None, dict[str, typing.Any] | None]:
+    def load_test_state(
+        self,
+        params: ATE,
+    ) -> tuple[EvalState | None, dict[str, typing.Any] | None]:
         return self._load_state(params, self._test_state_from_dict)
 
     def save_test_state(
@@ -571,112 +635,22 @@ class StateHandler(typing.Generic[INF, ATR, STR, ATE, STE]):
     ) -> None:
         new_test_state = self._new_test_state
 
-        if new_test_state and params.save_path:
+        if params.save_path:
             state = new_test_state(params, result, last_state_dict)
             self._save_state(
                 params=params,
                 state=state,
                 last_state_dict=last_state_dict)
 
-SMTR = typing.TypeVar("SMTR", bound=SingleModelTrainParams[
-    typing.Any, typing.Any, typing.Any, typing.Any, typing.Any])
-SMTE = typing.TypeVar("SMTE", bound=SingleModelTestParams[
-    typing.Any, typing.Any, typing.Any, typing.Any])
-
-class SingleModelStateHandler(StateHandler[
-            MinimalStateWithMetrics,
-            SMTR,
-            SingleModelFullState,
-            SMTE,
-            SingleModelEvalState
-        ],
-        typing.Generic[SMTR, SMTE]):
-    def __init__(self, use_best: bool):
-        def get_eval_state(
-            params: SingleModelMinimalEvalParams,
-            state_dict: dict[str, typing.Any],
-        ) -> SingleModelEvalState:
-            return SingleModelEvalState.from_state_dict_with_params(
-                params,
-                use_best=use_best,
-                state_dict=state_dict)
-
-        def test_state_from_dict(
-            params: SMTE,
-            state_dict: dict[str, typing.Any],
-        ) -> SingleModelEvalState | None:
-            return get_eval_state(
-                params=SingleModelMinimalEvalParams(
-                    model=params.model,
-                    save_path=params.save_path,
-                    skip_load_state=params.skip_load_state,
-                ),
-                state_dict=state_dict,
-            )
-
-        def info_from_dict(state_dict: dict[str, typing.Any]) -> MinimalStateWithMetrics:
-            return MinimalStateWithMetrics.from_state_dict(state_dict)
-
-        def train_state_from_dict(
-            params: SMTR,
-            state_dict: dict[str, typing.Any],
-        ) -> SingleModelFullState:
-            return SingleModelFullState.from_state_dict_with_params(
-                params,
-                use_best=False,
-                state_dict=state_dict)
-
-        def new_train_state(
-            params: SMTR,
-            train_results: TrainResult,
-            last_state_dict: dict[str, typing.Any] | None,
-        ) -> SingleModelFullState:
-            return SingleModelFullState(
-                model=params.model,
-                optimizer=params.optimizer,
-                scheduler=params.scheduler,
-                early_stopper=params.early_stopper,
-                train_results=train_results,
-                best_state_dict=None,
-                test_results=(
-                    TestResult.from_state_dict(last_state_dict['test_results'])
-                    if last_state_dict and last_state_dict.get('test_results')
-                    else None),
-                metrics=last_state_dict.get('metrics') if last_state_dict else None,
-            )
-
-        def new_test_state(
-            params: SMTE,
-            test_results: TestResult,
-            last_state_dict: dict[str, typing.Any] | None,
-        ) -> SingleModelEvalState | None:
-            return SingleModelEvalState(
-                model=params.model,
-                train_results=TrainResult.from_state_dict(
-                    last_state_dict['train_results']),
-                test_results=test_results,
-                metrics=last_state_dict.get('metrics'),
-            ) if last_state_dict and last_state_dict.get('train_results') else None
-
-        super().__init__(
-            info_from_dict=info_from_dict,
-            train_state_from_dict=train_state_from_dict,
-            new_train_state=new_train_state,
-            test_state_from_dict=test_state_from_dict,
-            new_test_state=new_test_state,
-        )
-
-        self.get_eval_state = get_eval_state
-
     def load_eval_state(
         self,
-        params: SingleModelMinimalEvalParams,
-    ) -> tuple[SingleModelEvalState | None, dict[str, typing.Any] | None]:
-        return self._load_state(params, self.get_eval_state)
+        params: EvalParams,
+    ) -> tuple[EvalState | None, dict[str, typing.Any] | None]:
+        return self._load_state(params, self._get_eval_state)
 
-    def load_state_with_metrics(self, save_path: str) -> MinimalStateWithMetrics | None:
+    def load_state_with_metrics(self, save_path: str) -> StateWithMetrics | None:
         state_dict = _load_state_dict(save_path=save_path)
-        return MinimalStateWithMetrics.from_state_dict(state_dict) if state_dict else None
+        return StateWithMetrics.from_state_dict(state_dict) if state_dict else None
 
     def save_metrics(self, metrics: dict[str, typing.Any], save_path: str | None) -> None:
         if save_path:

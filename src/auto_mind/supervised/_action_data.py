@@ -1,5 +1,5 @@
 # ruff: noqa: E741 (ambiguous variable name)
-from typing import Any, Dict, Generic, Protocol, TypeVar
+from typing import Any, Protocol
 import typing
 import torch
 from torch import nn, optim
@@ -9,7 +9,10 @@ from torch.utils.data import DataLoader
 ############### Protocols and Types ################
 ####################################################
 
-M = typing.TypeVar("M")
+I = typing.TypeVar("I")
+O = typing.TypeVar("O")
+T = typing.TypeVar("T")
+MT = typing.TypeVar("MT")
 
 class Scheduler(Protocol):
     def step(self, epoch: int | None = None) -> None:
@@ -18,7 +21,7 @@ class Scheduler(Protocol):
     def state_dict(self) -> dict[str, Any]:
         ...
 
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         ...
 
 class EarlyStopper:
@@ -34,92 +37,15 @@ class EarlyStopper:
     ) -> typing.Self:
         return self
 
-class TrainEarlyStopper(EarlyStopper, typing.Generic[M]):
+class TrainEarlyStopper(EarlyStopper, typing.Generic[MT]):
     def check(self) -> bool:
         return self.check_finish()
 
     def check_finish(self) -> bool:
         return False
 
-    def update_epoch(self, loss: float, accuracy: float | None, metrics: M | None) -> None:
+    def update_epoch(self, loss: float, accuracy: float | None, metrics: MT | None) -> None:
         pass
-
-class ChainedEarlyStopper(TrainEarlyStopper[M], typing.Generic[M]):
-    def __init__(self, stoppers: list[EarlyStopper]):
-        self.stoppers = stoppers
-
-    def check(self) -> bool:
-        if self.check_finish():
-            return True
-        return any(stopper.check() for stopper in self.stoppers)
-
-    def check_finish(self) -> bool:
-        return (
-            any(stopper.check_finish()
-            for stopper in self.stoppers
-            if isinstance(stopper, TrainEarlyStopper)))
-
-    def update_epoch(self, loss: float, accuracy: float | None, metrics: M | None) -> None:
-        for stopper in self.stoppers:
-            if isinstance(stopper, TrainEarlyStopper):
-                stopper.update_epoch(loss=loss, accuracy=accuracy, metrics=metrics)
-
-    def state_dict(self) -> dict[str, Any]:
-        return dict(stoppers=[stopper.state_dict() for stopper in self.stoppers])
-
-    def load_state_dict(self, state_dict: dict[str, Any]) -> typing.Self:
-        for i, stopper in enumerate(self.stoppers):
-            stopper.load_state_dict(state_dict['stoppers'][i])
-        return self
-
-class AccuracyEarlyStopper(TrainEarlyStopper[M], typing.Generic[M]):
-    def __init__(self, min_accuracy: float, patience: int = 5):
-        self.patience = patience
-        self.min_accuracy = min_accuracy
-        self.amount = 0
-
-    def check_finish(self) -> bool:
-        return self.amount >= self.patience
-
-    def update_epoch(self, loss: float, accuracy: float | None, metrics: M | None) -> None:
-        if accuracy is None:
-            self.amount = 0
-        elif accuracy < self.min_accuracy:
-            self.amount = 0
-        else:
-            self.amount += 1
-
-    def state_dict(self) -> dict[str, Any]:
-        parent = super().state_dict()
-        return dict(amount=self.amount, parent=parent)
-
-    def load_state_dict(self, state_dict: dict[str, Any]) -> typing.Self:
-        self.amount = state_dict.get('amount', 0)
-        super().load_state_dict(state_dict.get('parent', {}))
-        return self
-
-class OptimizerChain(optim.Optimizer):
-    def __init__(self, optimizers: list[optim.Optimizer]) -> None:
-        super().__init__(params=[], defaults=dict())
-        self.optimizers: list[optim.Optimizer] = optimizers
-
-    def zero_grad(self, set_to_none: bool = True) -> None:
-        for optimizer in self.optimizers:
-            optimizer.zero_grad(set_to_none=set_to_none)
-
-    def step(self, closure=None) -> None: # type: ignore
-        for optimizer in self.optimizers:
-            optimizer.step()
-
-    def state_dict(self) -> dict[str, Any]:
-        return {
-            f'optimizer_{i}': optimizer.state_dict()
-            for i, optimizer in enumerate(self.optimizers)
-        }
-
-    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
-        for i, optimizer in enumerate(self.optimizers):
-            optimizer.load_state_dict(state_dict[f'optimizer_{i}'])
 
 ####################################################
 ################# General Results ##################
@@ -428,9 +354,10 @@ OT = typing.TypeVar("OT", bound=optim.Optimizer)
 
 class MinimalFullState(BaseResult):
     def __init__(
-            self,
-            train_results: TrainResult,
-            test_results: TestResult | None):
+        self,
+        train_results: TrainResult,
+        test_results: TestResult | None,
+    ):
         self.train_results = train_results
         self.test_results = test_results
 
@@ -470,78 +397,72 @@ class ModelMainState(typing.Generic[OT]):
             scheduler=self.scheduler.state_dict() if self.scheduler else None,
             early_stopper=self.early_stopper.state_dict() if self.early_stopper else None)
 
-class ModelFullState(typing.Generic[OT], MinimalFullState):
-    def __init__(
-            self,
-            model: nn.Module,
-            optimizer: OT,
-            best_state_dict: dict[str, Any] | None,
-            train_results: TrainResult,
-            test_results: TestResult | None):
-        super().__init__(
-            train_results=train_results,
-            test_results=test_results)
-        self.model = model
-        self.optimizer = optimizer
-        self.best_state_dict = best_state_dict
-
-    def state_dict(self) -> dict[str, Any]:
-        last_state_dict = ModelMainState(model=self.model, optimizer=self.optimizer).state_dict()
-        best_state_dict = self.best_state_dict
-
-        if (not best_state_dict) or (self.train_results.best_epoch == self.train_results.epoch):
-            best_state_dict = last_state_dict
-
-        return dict(
-            best=best_state_dict,
-            last=last_state_dict,
-            train_results=self.train_results.state_dict(),
-            test_results=self.test_results.state_dict() if self.test_results else None)
-
-    @staticmethod
-    def from_state_dict(
-        model: nn.Module,
-        optimizer: OT,
-        use_best: bool,
-        state_dict: dict[str, Any],
-    ) -> 'ModelFullState[OT]':
-        best_state_dict = state_dict['best']
-        last_state_dict = state_dict['last']
-        outer_state_dict = best_state_dict if use_best else last_state_dict
-
-        model.load_state_dict(outer_state_dict['model'])
-        optimizer.load_state_dict(outer_state_dict['optimizer'])
-
-        train_results = TrainResult.from_state_dict(
-            state_dict['train_results'])
-        test_results = TestResult.from_state_dict(
-            state_dict['test_results']) if state_dict['test_results'] else None
-
-        return ModelFullState(
-            model=model,
-            optimizer=optimizer,
-            best_state_dict=best_state_dict,
-            train_results=train_results,
-            test_results=test_results)
-
 ####################################################
 ################## General Params ##################
 ####################################################
 
 class MinimalHookParams():
     def __init__(
-            self,
-            current_amount: int,
-            loss: float,
-            accuracy: float | None):
+        self,
+        current_amount: int,
+        loss: float,
+        accuracy: float | None,
+    ):
         self.current_amount = current_amount
         self.loss = loss
         self.accuracy = accuracy
 
-I = TypeVar("I")
-O = TypeVar("O")
-TRH = TypeVar("TRH", bound=MinimalHookParams)
-TEH = TypeVar("TEH", bound=MinimalHookParams)
+class GeneralHookParams(MinimalHookParams, typing.Generic[I, O]):
+    def __init__(
+        self,
+        epoch: int,
+        batch: int,
+        current_amount: int,
+        loss: float,
+        accuracy: float | None,
+        target: torch.Tensor,
+        input: I,
+        full_output: O | None,
+        output: torch.Tensor,
+    ):
+        super().__init__(
+            current_amount=current_amount,
+            loss=loss,
+            accuracy=accuracy)
+
+        self.epoch = epoch
+        self.batch = batch
+        self.target = target
+        self.input = input
+        self.output = output
+        self.full_output = full_output
+
+class GeneralEvalBaseResult(typing.Generic[I, O]):
+    def __init__(
+        self,
+        input: I,
+        full_output: O,
+        main_output: torch.Tensor,
+    ):
+        self.input = input
+        self.full_output = full_output
+        self.main_output = main_output
+
+class GeneralEvalResult(typing.Generic[O, T]):
+    def __init__(
+        self,
+        full_output: O,
+        main_output: torch.Tensor,
+        prediction: T,
+        confidence: float,
+    ):
+        self.full_output = full_output
+        self.main_output = main_output
+        self.prediction = prediction
+        self.confidence = confidence
+
+TRH = typing.TypeVar("TRH", bound=MinimalHookParams)
+TEH = typing.TypeVar("TEH", bound=MinimalHookParams)
 
 class MinimalEvalParams():
     def __init__(
@@ -552,12 +473,12 @@ class MinimalEvalParams():
         self.save_path = save_path
         self.skip_load_state = skip_load_state
 
-class TrainBatchInfo(typing.Generic[M]):
+class TrainBatchInfo(typing.Generic[MT]):
     def __init__(
         self,
         loss: float | None,
         accuracy: float | None,
-        metrics: M | None,
+        metrics: MT | None,
         count: int | None,
         batch: int | None,
         total_batch: int | None,
@@ -581,7 +502,7 @@ class TrainBatchInfo(typing.Generic[M]):
         self.validation = validation
         self.test = test
 
-class TrainEpochInfo(typing.Generic[M]):
+class TrainEpochInfo(typing.Generic[MT]):
     def __init__(
         self,
         epochs: int | None,
@@ -592,8 +513,8 @@ class TrainEpochInfo(typing.Generic[M]):
         val_loss: float | None,
         accuracy: float | None,
         val_accuracy: float | None,
-        metrics: M | None,
-        val_metrics: M | None,
+        metrics: MT | None,
+        val_metrics: MT | None,
         count: int | None,
         validate: bool,
         batch_interval: bool | None,
@@ -612,62 +533,6 @@ class TrainEpochInfo(typing.Generic[M]):
         self.validate = validate
         self.batch_interval = batch_interval
 
-class MinimalTestParams(MinimalEvalParams, typing.Generic[M]):
-    def __init__(
-            self,
-            save_every: int | None,
-            print_every: int | None,
-            metric_every: int | None,
-            early_stopper: EarlyStopper | None,
-            get_batch_info: typing.Callable[[TrainBatchInfo[M]], str] | None,
-            save_path: str | None,
-            skip_load_state: bool):
-
-        super().__init__(
-            save_path=save_path,
-            skip_load_state=skip_load_state)
-
-        self.save_every = save_every
-        self.print_every = print_every
-        self.metric_every = metric_every
-        self.early_stopper = early_stopper
-        self.get_batch_info = get_batch_info
-
-class MinimalTrainParams(MinimalEvalParams, Generic[I, TRH, TEH, M]):
-    def __init__(
-            self,
-            train_dataloader: DataLoader[I],
-            validation_dataloader: DataLoader[I] | None,
-            train_hook: typing.Callable[[TRH], None] | None,
-            validation_hook: typing.Callable[[TEH], None] | None,
-            epochs: int,
-            batch_interval: bool | None,
-            save_every: int | None,
-            print_every: int | None,
-            metric_every: int | None,
-            early_stopper: EarlyStopper | None,
-            save_path: str | None,
-            skip_load_state: bool,
-            get_epoch_info: typing.Callable[[TrainEpochInfo[M]], str] | None,
-            get_batch_info: typing.Callable[[TrainBatchInfo[M]], str] | None):
-
-        super().__init__(
-            save_path=save_path,
-            skip_load_state=skip_load_state)
-
-        self.train_dataloader = train_dataloader
-        self.validation_dataloader = validation_dataloader
-        self.train_hook = train_hook
-        self.validation_hook = validation_hook
-        self.epochs = epochs
-        self.batch_interval = batch_interval
-        self.save_every = save_every
-        self.print_every = print_every
-        self.metric_every = metric_every
-        self.early_stopper = early_stopper
-        self.get_epoch_info = get_epoch_info
-        self.get_batch_info = get_batch_info
-
 class BatchInOutParams(typing.Generic[I, O]):
     def __init__(
         self,
@@ -681,9 +546,22 @@ class BatchInOutParams(typing.Generic[I, O]):
         self.output = output
         self.target = target
 
-class SingleModelTrainParams(
-    MinimalTrainParams[tuple[I, torch.Tensor], TRH, TEH, M],
-    Generic[I, O, TRH, TEH, M],
+class EvalParams(MinimalEvalParams):
+    def __init__(
+        self,
+        model: nn.Module,
+        save_path: str | None = None,
+        skip_load_state: bool = False,
+    ) -> None:
+        super().__init__(
+            save_path=save_path,
+            skip_load_state=skip_load_state)
+
+        self.model = model
+
+class TrainParams(
+    MinimalEvalParams,
+    typing.Generic[I, O, MT],
 ):
     def __init__(
         self,
@@ -701,28 +579,29 @@ class SingleModelTrainParams(
         step_only_on_accuracy_loss: bool = False,
         clip_grad_max: float | None = None,
         early_stopper: EarlyStopper | None = None,
-        get_epoch_info: typing.Callable[[TrainEpochInfo[M]], str] | None = None,
-        get_batch_info: typing.Callable[[TrainBatchInfo[M]], str] | None = None,
-        train_hook: typing.Callable[[TRH], None] | None = None,
-        validation_hook: typing.Callable[[TEH], None] | None = None,
+        get_epoch_info: typing.Callable[[TrainEpochInfo[MT]], str] | None = None,
+        get_batch_info: typing.Callable[[TrainBatchInfo[MT]], str] | None = None,
+        train_hook: typing.Callable[[GeneralHookParams[I, O]], None] | None = None,
+        validation_hook: typing.Callable[[GeneralHookParams[I, O]], None] | None = None,
         save_path: str | None = None,
         skip_load_state: bool = False,
     ) -> None:
         super().__init__(
-            train_dataloader=train_dataloader,
-            validation_dataloader=validation_dataloader,
-            train_hook=train_hook,
-            validation_hook=validation_hook,
-            epochs=epochs,
-            batch_interval=batch_interval,
-            save_every=save_every,
-            print_every=print_every,
-            metric_every=metric_every,
-            early_stopper=early_stopper,
-            get_epoch_info=get_epoch_info,
-            get_batch_info=get_batch_info,
             save_path=save_path,
             skip_load_state=skip_load_state)
+
+        self.train_dataloader = train_dataloader
+        self.validation_dataloader = validation_dataloader
+        self.train_hook = train_hook
+        self.validation_hook = validation_hook
+        self.epochs = epochs
+        self.batch_interval = batch_interval
+        self.save_every = save_every
+        self.print_every = print_every
+        self.metric_every = metric_every
+        self.early_stopper = early_stopper
+        self.get_epoch_info = get_epoch_info
+        self.get_batch_info = get_batch_info
 
         self.model = model
         self.criterion = criterion
@@ -731,20 +610,7 @@ class SingleModelTrainParams(
         self.step_only_on_accuracy_loss = step_only_on_accuracy_loss
         self.clip_grad_max = clip_grad_max
 
-class SingleModelMinimalEvalParams(MinimalEvalParams):
-    def __init__(
-        self,
-        model: nn.Module,
-        save_path: str | None = None,
-        skip_load_state: bool = False,
-    ) -> None:
-        super().__init__(
-            save_path=save_path,
-            skip_load_state=skip_load_state)
-
-        self.model = model
-
-class SingleModelTestParams(MinimalTestParams[M], Generic[I, O, TEH, M]):
+class TestParams(MinimalEvalParams, typing.Generic[I, O, MT]):
     def __init__(
         self,
         model: nn.Module,
@@ -754,33 +620,31 @@ class SingleModelTestParams(MinimalTestParams[M], Generic[I, O, TEH, M]):
         print_every: int | None,
         metric_every: int | None,
         early_stopper: EarlyStopper | None = None,
-        get_batch_info: typing.Callable[[TrainBatchInfo[M]], str] | None = None,
-        hook: typing.Callable[[TEH], None] | None = None,
+        get_batch_info: typing.Callable[[TrainBatchInfo[MT]], str] | None = None,
+        hook: typing.Callable[[GeneralHookParams[I, O]], None] | None = None,
         save_path: str | None = None,
         skip_load_state: bool = False,
     ) -> None:
         super().__init__(
-            save_every=save_every,
-            print_every=print_every,
-            metric_every=metric_every,
-            early_stopper=early_stopper,
-            get_batch_info=get_batch_info,
             save_path=save_path,
             skip_load_state=skip_load_state)
+
+        self.save_every = save_every
+        self.print_every = print_every
+        self.metric_every = metric_every
+        self.early_stopper = early_stopper
+        self.get_batch_info = get_batch_info
 
         self.model = model
         self.dataloader = dataloader
         self.hook = hook
         self.criterion = criterion
 
-ATR = TypeVar("ATR", bound=MinimalTrainParams[Any, Any, Any, Any])
-ATE = TypeVar("ATE", bound=MinimalEvalParams)
-
 ####################################################
 ################## General States ##################
 ####################################################
 
-class SingleModelEvalState(MinimalFullState):
+class EvalState(MinimalFullState):
     def __init__(
         self,
         model: nn.Module,
@@ -804,7 +668,7 @@ class SingleModelEvalState(MinimalFullState):
         model: nn.Module,
         use_best: bool,
         state_dict: dict[str, Any],
-    ) -> 'SingleModelEvalState':
+    ) -> 'EvalState':
         best_state_dict = state_dict['best']
         last_state_dict = state_dict['last']
         outer_state_dict = best_state_dict if use_best else last_state_dict
@@ -818,7 +682,7 @@ class SingleModelEvalState(MinimalFullState):
         test_results = TestResult.from_state_dict(
             test_results_dict) if test_results_dict else None
 
-        return SingleModelEvalState(
+        return EvalState(
             model=model,
             train_results=train_results,
             test_results=test_results,
@@ -826,17 +690,17 @@ class SingleModelEvalState(MinimalFullState):
 
     @staticmethod
     def from_state_dict_with_params(
-        params: SingleModelMinimalEvalParams,
+        params: EvalParams,
         use_best: bool,
         state_dict: dict[str, Any],
-    ) -> 'SingleModelEvalState':
-        return SingleModelEvalState.from_state_dict(
+    ) -> 'EvalState':
+        return EvalState.from_state_dict(
             model=params.model,
             use_best=use_best,
             state_dict=state_dict,
         )
 
-class SingleModelFullState(MinimalFullState):
+class FullState(MinimalFullState):
     def __init__(
         self,
         model: nn.Module,
@@ -878,12 +742,13 @@ class SingleModelFullState(MinimalFullState):
 
     @staticmethod
     def from_state_dict(
-            model: nn.Module,
-            optimizer: optim.Optimizer,
-            scheduler: Scheduler | None,
-            early_stopper: EarlyStopper | None,
-            use_best: bool,
-            state_dict: dict[str, Any]) -> 'SingleModelFullState':
+        model: nn.Module,
+        optimizer: optim.Optimizer,
+        scheduler: Scheduler | None,
+        early_stopper: EarlyStopper | None,
+        use_best: bool,
+        state_dict: dict[str, Any],
+    ) -> 'FullState':
         best_state_dict = state_dict['best']
         last_state_dict = state_dict['last']
         outer_state_dict = best_state_dict if use_best else last_state_dict
@@ -908,7 +773,7 @@ class SingleModelFullState(MinimalFullState):
         test_results = TestResult.from_state_dict(
             test_results_dict) if test_results_dict else None
 
-        return SingleModelFullState(
+        return FullState(
             model=model,
             optimizer=optimizer,
             scheduler=scheduler,
@@ -920,10 +785,11 @@ class SingleModelFullState(MinimalFullState):
 
     @staticmethod
     def from_state_dict_with_params(
-            params: SingleModelTrainParams[Any, Any, Any, Any, Any],
-            use_best: bool,
-            state_dict: dict[str, Any]) -> 'SingleModelFullState':
-        return SingleModelFullState.from_state_dict(
+        params: TrainParams[Any, Any, Any],
+        use_best: bool,
+        state_dict: dict[str, Any],
+    ) -> 'FullState':
+        return FullState.from_state_dict(
             model=params.model,
             optimizer=params.optimizer,
             scheduler=params.scheduler,
@@ -932,13 +798,14 @@ class SingleModelFullState(MinimalFullState):
             state_dict=state_dict,
         )
 
-class MinimalStateWithMetrics(MinimalFullState):
+class StateWithMetrics(MinimalFullState):
     def __init__(
-            self,
-            completed: bool,
-            train_results: TrainResult,
-            test_results: TestResult | None,
-            metrics: dict[str, typing.Any] | None):
+        self,
+        completed: bool,
+        train_results: TrainResult,
+        test_results: TestResult | None,
+        metrics: dict[str, typing.Any] | None,
+    ):
         super().__init__(
             train_results=train_results,
             test_results=test_results)
@@ -946,7 +813,7 @@ class MinimalStateWithMetrics(MinimalFullState):
         self.completed = completed
 
     @staticmethod
-    def from_state_dict(state_dict: dict[str, typing.Any]) -> 'MinimalStateWithMetrics':
+    def from_state_dict(state_dict: dict[str, typing.Any]) -> 'StateWithMetrics':
         completed = bool(state_dict.get('completed'))
         train_results = TrainResult.from_state_dict(
             state_dict['train_results'])
@@ -954,7 +821,7 @@ class MinimalStateWithMetrics(MinimalFullState):
             state_dict['test_results']) if state_dict['test_results'] else None
         metrics = state_dict.get('metrics')
 
-        return MinimalStateWithMetrics(
+        return StateWithMetrics(
             completed=completed,
             train_results=train_results,
             test_results=test_results,
