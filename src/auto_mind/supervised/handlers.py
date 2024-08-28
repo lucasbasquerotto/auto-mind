@@ -4,15 +4,6 @@ from ._action_data import (
     TrainEarlyStopper,
     BatchInOutParams,
 )
-from ._batch_handlers import (
-    MetricsHandlerInput,
-    MetricsHandler,
-    TensorMetricsHandler,
-)
-from ._action import (
-    default_batch_info,
-    default_epoch_info,
-)
 from ._action_handlers import (
     ChainedEarlyStopper,
     AccuracyEarlyStopper,
@@ -40,17 +31,21 @@ from ._action_handlers import (
     AllProbsEvaluator,
     ValuesEvaluator,
 )
+from ._batch_handlers import (
+    MetricsHandlerInput,
+    MetricsHandler,
+    TensorMetricsHandler,
+)
+from ._action import (
+    default_batch_info,
+    default_epoch_info,
+)
 
 __all__ = [
     'Scheduler',
     'EarlyStopper',
     'TrainEarlyStopper',
     'BatchInOutParams',
-    'MetricsHandlerInput',
-    'MetricsHandler',
-    'TensorMetricsHandler',
-    'default_batch_info',
-    'default_epoch_info',
     'ChainedEarlyStopper',
     'AccuracyEarlyStopper',
     'OptimizerChain',
@@ -76,4 +71,9 @@ __all__ = [
     'MaxProbBatchEvaluator',
     'AllProbsEvaluator',
     'ValuesEvaluator',
+    'MetricsHandlerInput',
+    'MetricsHandler',
+    'TensorMetricsHandler',
+    'default_batch_info',
+    'default_epoch_info',
 ]

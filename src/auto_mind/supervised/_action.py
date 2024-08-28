@@ -9,12 +9,13 @@ from torch.utils.data import DataLoader
 from auto_mind.supervised._action_data import (
     BaseResult, TestResult, TrainResult, ExecutionCursor, EarlyStopper,
     TrainEarlyStopper, TrainEpochInfo, TrainBatchInfo, TrainParams,
-    TestParams, Scheduler, BatchInOutParams, EvalParams, GeneralHookParams)
+    TestParams, Scheduler, BatchInOutParams, EvalParams, GeneralHookParams,
+    StateWithMetrics)
 from auto_mind.supervised._action_handlers import (
     BatchExecutor, BatchAccuracyCalculator, BatchExecutorParams, BatchAccuracyParams,
     MetricsCalculator, MetricsCalculatorInputParams, MetricsCalculatorParams,
     AbortedException)
-from auto_mind.supervised._state_handlers import StateHandler, StateWithMetrics
+from auto_mind.supervised._state_handlers import StateHandler
 from auto_mind.supervised._batch_handlers import (
     BatchHandlerData, MetricsHandler, BatchHandler, BatchHandlerResult,
     TrainBatchHandler, TestBatchHandler, BatchHandlerRunParams)
@@ -56,16 +57,15 @@ class GeneralAction(typing.Generic[I, O, MT]):
             TestParams[I, O, MT],
         ](use_best=use_best)
 
-        def load_eval_state(params: EvalParams) -> None:
-            main_state_handler.load_eval_state(params)
-
-        self.load_eval_state = load_eval_state
         self.state_handler = main_state_handler
         self.metrics_handler = metrics_handler
         self.metrics_calculator = metrics_calculator
         self.random_seed = random_seed
         self.executor = executor
         self.accuracy_calculator = accuracy_calculator
+
+    def load_eval_state(self, params: EvalParams) -> None:
+        self.state_handler.load_eval_state(params)
 
     def info(self, save_path: str) -> StateWithMetrics | None:
         return self.state_handler.info(save_path=save_path)
@@ -288,25 +288,19 @@ class GeneralAction(typing.Generic[I, O, MT]):
                     get_batch_info=get_batch_info)
 
                 with torch.set_grad_enabled(True):
-                    result = GeneralActionRunner(
-                        train=True,
-                        batch_handler=batch_handler,
-                        dataloader=train_dataloader,
-                        hook=params.train_hook,
-                        model=params.model,
-                        optimizer=params.optimizer,
-                        scheduler=(
-                            None
-                            if params.validation_dataloader
-                            is not None else params.scheduler),
-                        criterion=params.criterion,
-                        step_only_on_accuracy_loss=params.step_only_on_accuracy_loss,
-                        clip_grad_max=params.clip_grad_max,
+                    result = self._run(
                         epoch=epoch,
-                        random_seed=self.random_seed,
-                        executor=self.executor,
-                        accuracy_calculator=self.accuracy_calculator,
-                    ).run()
+                        is_train=True,
+                        dataloader=train_dataloader,
+                        model=params.model,
+                        criterion=params.criterion,
+                        optimizer=params.optimizer,
+                        scheduler=params.scheduler,
+                        clip_grad_max=params.clip_grad_max,
+                        hook=params.train_hook,
+                        step_only_on_accuracy_loss=params.step_only_on_accuracy_loss,
+                        batch_handler=batch_handler,
+                    )
 
                 train_loss = result.total_loss
                 train_accuracy = result.total_accuracy
@@ -357,22 +351,19 @@ class GeneralAction(typing.Generic[I, O, MT]):
 
                     with torch.set_grad_enabled(False):
                         assert validation_dataloader is not None
-                        val_result = GeneralActionRunner(
-                            train=False,
-                            batch_handler=batch_handler,
+                        val_result = self._run(
+                            epoch=epoch,
+                            is_train=False,
                             dataloader=validation_dataloader,
-                            hook=params.validation_hook,
                             model=params.model,
+                            criterion=params.criterion,
                             optimizer=None,
                             scheduler=params.scheduler,
-                            criterion=params.criterion,
-                            step_only_on_accuracy_loss=params.step_only_on_accuracy_loss,
                             clip_grad_max=None,
-                            epoch=epoch,
-                            random_seed=self.random_seed,
-                            executor=self.executor,
-                            accuracy_calculator=self.accuracy_calculator,
-                        ).run()
+                            hook=params.validation_hook,
+                            step_only_on_accuracy_loss=params.step_only_on_accuracy_loss,
+                            batch_handler=batch_handler,
+                        )
 
                     if val_result:
                         val_loss = val_result.total_loss
@@ -595,22 +586,19 @@ class GeneralAction(typing.Generic[I, O, MT]):
                 get_batch_info=get_batch_info)
 
             with torch.set_grad_enabled(False):
-                result = GeneralActionRunner(
-                    train=False,
-                    batch_handler=batch_handler,
+                result = self._run(
+                    epoch=epoch,
+                    is_train=False,
                     dataloader=test_dataloader,
-                    hook=params.hook,
                     model=params.model,
+                    criterion=params.criterion,
                     optimizer=None,
                     scheduler=None,
-                    criterion=params.criterion,
-                    step_only_on_accuracy_loss=False,
                     clip_grad_max=None,
-                    epoch=epoch,
-                    random_seed=self.random_seed,
-                    executor=self.executor,
-                    accuracy_calculator=self.accuracy_calculator,
-                ).run()
+                    hook=params.hook,
+                    step_only_on_accuracy_loss=False,
+                    batch_handler=batch_handler,
+                )
 
             if result:
                 loss = result.total_loss
@@ -672,51 +660,71 @@ class GeneralAction(typing.Generic[I, O, MT]):
     def define_as_completed(self, save_path: str) -> None:
         self.state_handler.define_as_completed(completed=True, save_path=save_path)
 
-class GeneralActionRunner(typing.Generic[I, O, T]):
-    def __init__(
+    def _run(
         self,
-        train: bool,
+        epoch: int,
+        is_train: bool,
         dataloader: DataLoader[tuple[I, torch.Tensor]],
-        hook: typing.Callable[[GeneralHookParams[I, O]], None] | None,
-        model: nn.Module,
+        model: torch.nn.Module,
+        criterion: torch.nn.Module | typing.Callable[[BatchInOutParams[I, O]], torch.Tensor],
         optimizer: optim.Optimizer | None,
         scheduler: Scheduler | None,
-        criterion: nn.Module | typing.Callable[[BatchInOutParams[I, O]], torch.Tensor],
-        step_only_on_accuracy_loss: bool,
         clip_grad_max: float | None,
-        epoch: int,
-        random_seed: int | None,
-        executor: BatchExecutor[I, O],
-        accuracy_calculator: BatchAccuracyCalculator[I, O] | None,
+        hook: typing.Callable[[GeneralHookParams[I, O]], None] | None,
+        step_only_on_accuracy_loss: bool,
         batch_handler: BatchHandler,
-    ):
-        self.train = train
-        self.dataloader = dataloader
-        self.hook = hook
-        self.model = model
-        self.optimizer = optimizer
-        self.scheduler = scheduler
-        self.criterion = criterion
-        self.step_only_on_accuracy_loss = step_only_on_accuracy_loss
-        self.clip_grad_max = clip_grad_max
-        self.epoch = epoch
-        self.random_seed = random_seed
-        self.executor = executor
-        self.accuracy_calculator = accuracy_calculator
-        self.batch_handler = batch_handler
-        self.best_accuracy = batch_handler.best_accuracy
+    ) -> BatchHandlerResult:
+        if is_train:
+            model.train()
 
-    def run_batch(
+            if not optimizer:
+                raise Exception('optimizer is not defined')
+        else:
+            model.eval()
+
+        result = batch_handler.run(
+            dataloader=dataloader,
+            fn=lambda params: self._run_batch(
+                params=params,
+                epoch=epoch,
+                is_train=is_train,
+                hook=hook,
+                model=model,
+                optimizer=optimizer,
+                criterion=criterion,
+                clip_grad_max=clip_grad_max,
+            ),
+            epoch=epoch,
+            random_seed=self.random_seed)
+
+        if scheduler:
+            new_accuracy = result.total_accuracy
+
+            if new_accuracy is None:
+                scheduler.step()
+            else:
+                best_accuracy = batch_handler.best_accuracy
+                worse_accuracy = (
+                    new_accuracy is not None
+                    and best_accuracy is not None
+                    and best_accuracy > new_accuracy)
+
+                if worse_accuracy or not step_only_on_accuracy_loss:
+                    scheduler.step()
+
+        return result
+
+    def _run_batch(
         self,
         params: BatchHandlerRunParams[tuple[I, torch.Tensor]],
+        epoch: int,
+        is_train: bool,
+        model: torch.nn.Module,
+        criterion: torch.nn.Module | typing.Callable[[BatchInOutParams[I, O]], torch.Tensor],
+        optimizer: optim.Optimizer | None,
+        clip_grad_max: float | None,
+        hook: typing.Callable[[GeneralHookParams[I, O]], None] | None,
     ) -> BatchHandlerData[I, O]:
-        train = self.train
-        hook = self.hook
-        model = self.model
-        optimizer = self.optimizer
-        criterion = self.criterion
-        clip_grad_max = self.clip_grad_max
-        epoch = self.epoch
         executor = self.executor
         accuracy_calculator = self.accuracy_calculator
 
@@ -730,7 +738,7 @@ class GeneralActionRunner(typing.Generic[I, O, T]):
         if not current_amount:
             raise Exception('Empty batch')
 
-        if train and optimizer:
+        if is_train and optimizer:
             optimizer.zero_grad()
 
         # call the model with the input and retrieve the output
@@ -753,7 +761,7 @@ class GeneralActionRunner(typing.Generic[I, O, T]):
         if math.isnan(loss_value):
             raise Exception('The loss is NaN')
 
-        if train :
+        if is_train:
             loss.backward() # type: ignore
 
             if clip_grad_max is not None:
@@ -792,46 +800,6 @@ class GeneralActionRunner(typing.Generic[I, O, T]):
             input=input_batch,
             output=output,
             target=target_batch)
-
-    def run(self) -> BatchHandlerResult:
-        train = self.train
-        model = self.model
-        optimizer = self.optimizer
-        scheduler = self.scheduler
-        step_only_on_accuracy_loss = self.step_only_on_accuracy_loss
-
-        if train:
-            model.train()
-
-            if not optimizer:
-                raise Exception('optimizer is not defined')
-        else:
-            model.eval()
-
-        result = self.batch_handler.run(
-            dataloader=self.dataloader,
-            fn=self.run_batch,
-            epoch=self.epoch,
-            random_seed=self.random_seed)
-
-        if scheduler:
-            new_accuracy = result.total_accuracy
-            best_accuracy = self.best_accuracy
-            worse_accuracy = (
-                new_accuracy is not None
-                and best_accuracy is not None
-                and best_accuracy > new_accuracy)
-
-            if new_accuracy is None:
-                scheduler.step()
-            else:
-                if worse_accuracy or not step_only_on_accuracy_loss:
-                    scheduler.step()
-
-                if best_accuracy is None or not worse_accuracy:
-                    self.best_accuracy = new_accuracy
-
-        return result
 
 ####################################################
 ################ Private Functions #################
