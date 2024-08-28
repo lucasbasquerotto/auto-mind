@@ -4,10 +4,12 @@ from ._action_data import (
     TrainEarlyStopper,
     BatchInOutParams,
 )
-from ._action import (
+from ._batch_handlers import (
     MetricsHandlerInput,
     MetricsHandler,
     TensorMetricsHandler,
+)
+from ._action import (
     default_batch_info,
     default_epoch_info,
 )
