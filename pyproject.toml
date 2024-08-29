@@ -20,3 +20,6 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/lucasbasquerotto/auto-mind"
 Issues = "https://github.com/lucasbasquerotto/auto-mind/issues"
+
+[tool.ruff]
+lint.ignore = ["E741"] # ambiguous variable name

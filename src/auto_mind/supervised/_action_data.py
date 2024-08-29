@@ -1,4 +1,4 @@
-# ruff: noqa: E741 (ambiguous variable name)
+from collections import abc
 from typing import Any, Protocol
 import typing
 import torch
@@ -9,10 +9,10 @@ from torch.utils.data import DataLoader
 ############### Protocols and Types ################
 ####################################################
 
-I = typing.TypeVar("I", bound=typing.Sized)
+I = typing.TypeVar("I", bound=abc.Sized)
 O = typing.TypeVar("O")
 T = typing.TypeVar("T")
-TG = typing.TypeVar("TG", bound=typing.Sized)
+TG = typing.TypeVar("TG", bound=abc.Sized)
 MT = typing.TypeVar("MT")
 
 class Scheduler(Protocol):

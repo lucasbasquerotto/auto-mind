@@ -1,5 +1,5 @@
-# ruff: noqa: E741 (ambiguous variable name)
 # pylint: disable=too-many-branches
+from collections import abc
 import time
 import math
 import typing
@@ -11,10 +11,10 @@ from auto_mind.supervised._action_data import (
     TrainBatchInfo, TrainParams, TestParams)
 from auto_mind.supervised._action_handlers import AbortedException
 
-I = typing.TypeVar("I", bound=typing.Sized)
+I = typing.TypeVar("I", bound=abc.Sized)
 O = typing.TypeVar("O")
 T = typing.TypeVar('T')
-TG = typing.TypeVar("TG", bound=typing.Sized)
+TG = typing.TypeVar("TG", bound=abc.Sized)
 M = typing.TypeVar("M", bound=nn.Module)
 OT = typing.TypeVar("OT", bound=optim.Optimizer)
 RV = typing.TypeVar("RV", bound=BaseResult)

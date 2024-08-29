@@ -1,4 +1,4 @@
-# ruff: noqa: E741 (ambiguous variable name)
+from collections import abc
 import typing
 import torch
 import numpy as np
@@ -7,11 +7,11 @@ from auto_mind.supervised._action_data import (
     GeneralEvalBaseResult, GeneralEvalResult, BatchInOutParams,
     StateWithMetrics, EarlyStopper, TrainEarlyStopper)
 
-I = typing.TypeVar("I", bound=typing.Sized)
+I = typing.TypeVar("I", bound=abc.Sized)
 O = typing.TypeVar('O')
 T = typing.TypeVar('T')
 P = typing.TypeVar('P')
-TG = typing.TypeVar("TG", bound=typing.Sized)
+TG = typing.TypeVar("TG", bound=abc.Sized)
 MT = typing.TypeVar('MT')
 EI = typing.TypeVar("EI")
 EO = typing.TypeVar("EO")

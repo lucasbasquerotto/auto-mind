@@ -1,8 +1,8 @@
-# ruff: noqa: E741 (ambiguous variable name)
 # pylint: disable=abstract-method
 # mypy: disable-error-code=attr-defined
 import typing
-from typing import Any, Callable, Generator, Generic, Iterable, Sized, TypeVar
+from collections import abc
+from typing import Any, Callable, Generator, Generic, Iterable, TypeVar
 import torch
 from torch.utils.data import Dataset, IterableDataset, Subset
 from torch.utils.data import random_split
@@ -91,9 +91,9 @@ class DatasetGroup(Dataset[I], Generic[I]):
             test=ItemsDataset(test_iter) if self.test is not None else None)
 
     def sized(self) -> typing.Self:
-        train_ok = isinstance(self.train, Sized)
-        validation_ok = isinstance(self.validation, Sized) if self.validation else True
-        test_ok = isinstance(self.test, Sized) if self.test else True
+        train_ok = isinstance(self.train, abc.Sized)
+        validation_ok = isinstance(self.validation, abc.Sized) if self.validation else True
+        test_ok = isinstance(self.test, abc.Sized) if self.test else True
 
         if train_ok and validation_ok and test_ok:
             return self
@@ -122,7 +122,7 @@ class SplitData():
         shuffle: bool | None = None,
         random_seed: int | None = None,
     ) -> DatasetGroup[I]:
-        if not isinstance(dataset, typing.Sized):
+        if not isinstance(dataset, abc.Sized):
             raise ValueError("Dataset must be sized")
 
         amount = len(dataset)
@@ -191,7 +191,7 @@ class DatasetTransformer(IterDataset[O], Generic[I, O]):
 
         super().__init__(generator=generator)
 
-        if isinstance(dataset, Sized):
+        if isinstance(dataset, abc.Sized):
             self.__len__ = dataset.__len__
 
 class DatasetFilter(IterDataset[I], Generic[I]):

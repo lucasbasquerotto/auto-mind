@@ -1,4 +1,3 @@
-# ruff: noqa: E741 (ambiguous variable name)
 import os
 import typing
 from typing import Callable

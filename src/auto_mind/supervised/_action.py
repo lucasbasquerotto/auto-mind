@@ -1,6 +1,6 @@
-# ruff: noqa: E741 (ambiguous variable name)
 # pylint: disable=too-many-branches
 # pylint: disable=too-many-nested-blocks
+from collections import abc
 import time
 import math
 import typing
@@ -17,9 +17,9 @@ from auto_mind.supervised._batch_handler import (
     MetricsHandler, TrainBatchHandler, TestBatchHandler)
 from auto_mind.supervised._base_runner import BaseRunner, BaseRunnerParams
 
-I = typing.TypeVar("I", bound=typing.Sized)
+I = typing.TypeVar("I", bound=abc.Sized)
 O = typing.TypeVar("O")
-TG = typing.TypeVar("TG", bound=typing.Sized)
+TG = typing.TypeVar("TG", bound=abc.Sized)
 MT = typing.TypeVar("MT")
 
 ####################################################

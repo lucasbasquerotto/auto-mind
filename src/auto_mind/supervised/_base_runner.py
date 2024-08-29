@@ -1,5 +1,5 @@
-# ruff: noqa: E741 (ambiguous variable name)
 # pylint: disable=too-many-branches
+from collections import abc
 import time
 import math
 import typing
@@ -14,9 +14,9 @@ from auto_mind.supervised._batch_handler import (
     BatchHandlerData, MetricsHandler, MetricsHandlerInput, BatchHandler, BatchHandlerResult,
     BatchHandlerRunParams)
 
-I = typing.TypeVar("I", bound=typing.Sized)
+I = typing.TypeVar("I", bound=abc.Sized)
 O = typing.TypeVar("O")
-TG = typing.TypeVar("TG", bound=typing.Sized)
+TG = typing.TypeVar("TG", bound=abc.Sized)
 MT = typing.TypeVar("MT")
 
 class BaseRunnerParams(typing.Generic[I, O, TG]):
@@ -98,7 +98,7 @@ class BaseRunner(typing.Generic[I, O, TG, MT]):
         torch.manual_seed(random_seed)
 
         def get_len(dataloader: typing.Iterable[I]) -> int | None:
-            if isinstance(dataloader, typing.Sized):
+            if isinstance(dataloader, abc.Sized):
                 try:
                     return len(dataloader)
                 except TypeError:
