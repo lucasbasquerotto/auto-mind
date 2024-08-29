@@ -36,7 +36,12 @@ from ._batch_handler import (
     MetricsHandler,
     TensorMetricsHandler,
 )
+from ._base_runner import (
+    BaseRunner,
+    BaseRunnerParams,
+)
 from ._action import (
+    GeneralAction,
     default_batch_info,
     default_epoch_info,
 )
@@ -74,6 +79,9 @@ __all__ = [
     'MetricsHandlerInput',
     'MetricsHandler',
     'TensorMetricsHandler',
+    'BaseRunner',
+    'BaseRunnerParams',
+    'GeneralAction',
     'default_batch_info',
     'default_epoch_info',
 ]

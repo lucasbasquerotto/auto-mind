@@ -117,7 +117,7 @@ class BatchHandler():
     def skip(self, batch: int) -> bool: # pylint: disable=unused-argument
         return True
 
-    def handle(
+    def run(
         self,
         batch: int,
         total_batch: int | None,
@@ -150,108 +150,6 @@ class BatchHandler():
 
         if self.metrics_handler and batch_metrics:
             self.total_metrics = self.metrics_handler.add(self.total_metrics, batch_metrics)
-
-    def run(
-        self,
-        dataloader: typing.Iterable[I],
-        fn: typing.Callable[
-            [BatchHandlerRunParams[I]],
-            BatchHandlerData[typing.Any, typing.Any, typing.Any]
-        ],
-        epoch: int,
-        random_seed: int | None,
-    ) -> BatchHandlerResult:
-        self.verify_early_stop()
-
-        random_seed = (random_seed or 1) * (epoch + 1)
-        torch.manual_seed(random_seed)
-
-        def get_len(dataloader: typing.Iterable[I]) -> int | None:
-            if isinstance(dataloader, typing.Sized):
-                try:
-                    return len(dataloader)
-                except TypeError:
-                    return None
-            return None
-
-        batch = 0
-        total_batch = get_len(dataloader)
-        current_amount = 0
-        batch_metrics: typing.Any | None = None
-        start_time = time.time()
-        out: BatchHandlerData[I, typing.Any, typing.Any] | None = None
-
-        metrics_handler = self.metrics_handler
-
-        def handle(last: bool) -> None:
-            nonlocal start_time
-            nonlocal batch_metrics
-
-            assert out is not None
-
-            loss_value = out.loss
-            batch_accuracy = out.accuracy
-
-            end_time = time.time()
-            time_diff = _time_diff_millis(start_time, end_time)
-            start_time = end_time
-
-            if metrics_handler:
-                metrics_params = MetricsHandlerInput(
-                    out=out,
-                    time_diff=time_diff)
-                batch_metrics = metrics_handler.define(metrics_params)
-
-            with torch.no_grad():
-                self.handle(
-                    batch=batch,
-                    total_batch=total_batch,
-                    amount=current_amount,
-                    last=last,
-                    loss=loss_value,
-                    accuracy=batch_accuracy,
-                    time_diff=time_diff,
-                    batch_metrics=batch_metrics)
-
-        for data in dataloader:
-            if out is not None and batch > 0:
-                handle(last=False)
-
-            self.verify_early_stop()
-            batch += 1
-
-            if self.skip(batch):
-                continue
-
-            out = fn(BatchHandlerRunParams(
-                data=data,
-                batch=batch,
-                amount=self.amount))
-
-            current_amount = out.amount
-
-            if not current_amount:
-                break
-
-        amount = current_amount + self.amount
-
-        if not amount:
-            raise Exception('The dataloader is empty')
-
-        if out is not None:
-            handle(last=True)
-
-        total_loss = self.total_loss / self.amount
-        total_accuracy = (
-            (self.total_accuracy / self.amount)
-            if self.total_accuracy is not None
-            else None)
-
-        return BatchHandlerResult(
-            total_loss=total_loss,
-            total_accuracy=total_accuracy,
-            total_time=self.total_time,
-            total_metrics=self.total_metrics)
 
 class GeneralBatchHandlerParams:
     def __init__(
@@ -341,7 +239,7 @@ class GeneralBatchHandler(BatchHandler):
         start_batch = results.batch + 1
         return batch < start_batch
 
-    def handle(
+    def run(
         self,
         batch: int,
         total_batch: int | None,
@@ -353,7 +251,7 @@ class GeneralBatchHandler(BatchHandler):
         batch_metrics: typing.Any | None,
     ) -> None:
         if not self.skip(batch):
-            self._handle(
+            self._run(
                 batch=batch,
                 total_batch=total_batch,
                 amount=amount,
@@ -364,7 +262,7 @@ class GeneralBatchHandler(BatchHandler):
                 batch_metrics=batch_metrics,
             )
 
-    def _handle(
+    def _run(
         self,
         batch: int,
         total_batch: int | None,
@@ -614,7 +512,7 @@ class TrainBatchHandler(GeneralBatchHandler, typing.Generic[ATR]):
             return super().skip(batch)
         return False
 
-    def handle(
+    def run(
         self,
         batch: int,
         total_batch: int | None,
@@ -626,7 +524,7 @@ class TrainBatchHandler(GeneralBatchHandler, typing.Generic[ATR]):
         batch_metrics: typing.Any | None,
     ) -> None:
         if self._active:
-            super().handle(
+            super().run(
                 batch=batch,
                 total_batch=total_batch,
                 amount=amount,
@@ -685,10 +583,3 @@ class TestBatchHandler(GeneralBatchHandler, typing.Generic[ATE]):
             early_stopper=early_stopper,
             metrics_handler=metrics_handler,
             test=True)
-
-####################################################
-################ Private Functions #################
-####################################################
-
-def _time_diff_millis(start_time: float, end_time: float) -> int:
-    return int((end_time - start_time) * 1000)

@@ -3,44 +3,27 @@ import time
 import math
 import typing
 import torch
-import torch.nn as nn
-from torch import optim
-from torch.utils.data import DataLoader
 from auto_mind.supervised._action_data import (
-    BaseResult, TestResult, TrainResult, ExecutionCursor, EarlyStopper,
-    TrainEarlyStopper, TrainEpochInfo, TrainBatchInfo, TrainParams,
-    TestParams, Scheduler, BatchInOutParams, EvalParams, GeneralHookParams,
-    StateWithMetrics)
+    TestResult, TrainResult, ExecutionCursor, EarlyStopper, StateWithMetrics,
+    TrainEarlyStopper, TrainEpochInfo, TrainBatchInfo, TrainParams, EvalParams,
+    TestParams)
 from auto_mind.supervised._action_handlers import (
-    BatchExecutor, BatchAccuracyCalculator, BatchExecutorParams, BatchAccuracyParams,
-    MetricsCalculator, MetricsCalculatorInputParams, MetricsCalculatorParams,
-    AbortedException)
+    BatchExecutor, BatchAccuracyCalculator, MetricsCalculator, MetricsCalculatorInputParams,
+    MetricsCalculatorParams, AbortedException)
 from auto_mind.supervised._state_handler import StateHandler
 from auto_mind.supervised._batch_handler import (
-    BatchHandlerData, MetricsHandler, BatchHandler, BatchHandlerResult,
-    TrainBatchHandler, TestBatchHandler, BatchHandlerRunParams)
+    MetricsHandler, TrainBatchHandler, TestBatchHandler)
+from auto_mind.supervised._base_runner import BaseRunner, BaseRunnerParams
 
 I = typing.TypeVar("I", bound=typing.Sized)
 O = typing.TypeVar("O")
-T = typing.TypeVar('T')
 TG = typing.TypeVar("TG", bound=typing.Sized)
-M = typing.TypeVar("M", bound=nn.Module)
-OT = typing.TypeVar("OT", bound=optim.Optimizer)
-RV = typing.TypeVar("RV", bound=BaseResult)
 MT = typing.TypeVar("MT")
-
-S = typing.TypeVar("S", bound=BaseResult)
-
-ATR = typing.TypeVar("ATR", bound=TrainParams[
-    typing.Any, typing.Any, typing.Any, typing.Any])
-ATE = typing.TypeVar("ATE", bound=TestParams[
-    typing.Any, typing.Any, typing.Any, typing.Any])
-
-AWP = typing.TypeVar("AWP")
-AWS = typing.TypeVar("AWS")
+ATR = typing.TypeVar("ATR", bound=TrainParams[typing.Any, typing.Any, typing.Any, typing.Any])
+ATE = typing.TypeVar("ATE", bound=TestParams[typing.Any, typing.Any, typing.Any, typing.Any])
 
 ####################################################
-############### General Action Impl ################
+################## General Action ##################
 ####################################################
 
 class GeneralAction(typing.Generic[I, O, TG, MT]):
@@ -58,12 +41,17 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
             TestParams[I, O, TG, MT],
         ](use_best=use_best)
 
+        base_runner = BaseRunner(
+            random_seed=random_seed,
+            executor=executor,
+            accuracy_calculator=accuracy_calculator,
+            metrics_handler=metrics_handler,
+        )
+
         self.state_handler = main_state_handler
         self.metrics_handler = metrics_handler
         self.metrics_calculator = metrics_calculator
-        self.random_seed = random_seed
-        self.executor = executor
-        self.accuracy_calculator = accuracy_calculator
+        self.base_runner = base_runner
 
     def load_eval_state(self, params: EvalParams) -> None:
         self.state_handler.load_eval_state(params)
@@ -71,52 +59,44 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
     def info(self, save_path: str) -> StateWithMetrics | None:
         return self.state_handler.info(save_path=save_path)
 
+    def define_as_pending(self, save_path: str) -> None:
+        self.state_handler.define_as_completed(completed=False, save_path=save_path)
+
+    def define_as_completed(self, save_path: str) -> None:
+        self.state_handler.define_as_completed(completed=True, save_path=save_path)
+
     def can_run(self, early_stopper: EarlyStopper | None) -> bool:
         if not early_stopper:
             return True
 
         return not early_stopper.check()
 
-    def _new_train_result(self, params: ATR) -> TrainResult:
-        validate = params.validation_dataloader is not None
-        return TrainResult(
-            epoch=0,
-            early_stopped=False,
-            early_stopped_max_epochs=0,
-            train_batch=0,
-            train_total_batch=None,
-            val_batch=0,
-            val_total_batch=None,
-            last_loss=0.0,
-            last_accuracy=0.0,
-            last_metrics=None,
-            last_train_loss=0.0,
-            last_train_accuracy=0.0,
-            last_train_metrics=None,
-            last_val_loss=0.0,
-            last_val_accuracy=0.0,
-            last_val_metrics=None,
-            best_epoch=0,
-            best_accuracy=0.0,
-            best_train_accuracy=0.0,
-            best_val_accuracy=0.0,
-            total_train_time=0,
-            total_val_time=0,
-            accuracies=[],
-            losses=[],
-            times=[],
-            metrics=[] if self.metrics_handler else None,
-            val_accuracies=[] if validate else None,
-            val_losses=[] if validate else None,
-            val_times=[] if validate else None,
-            val_metrics=[] if validate and self.metrics_handler else None)
+    def calculate_metrics(
+        self,
+        params: MetricsCalculatorInputParams,
+    ) -> dict[str, typing.Any] | None:
+        state_handler = self.state_handler
+        metrics_calculator = self.metrics_calculator
+        save_path = params.save_path
+
+        if not metrics_calculator or not save_path:
+            return None
+
+        info = state_handler.load_state_with_metrics(save_path=save_path)
+
+        if not info:
+            return None
+
+        calc_params = MetricsCalculatorParams(info=info, model=params.model)
+        metrics = metrics_calculator.run(calc_params)
+
+        state_handler.save_metrics(metrics, save_path=save_path)
+
+        return metrics
 
     def train(self, params: ATR) -> TrainResult | None:
         full_state, _ = self.state_handler.load_train_state(params)
-        results: TrainResult = (
-            full_state.train_results
-            if full_state
-            else self._new_train_result(params))
+        results: TrainResult | None = full_state.train_results if full_state else None
 
         try:
             if (not results) or (not results.early_stopped):
@@ -148,7 +128,10 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
         results: TrainResult = (
             full_state.train_results
             if full_state
-            else self._new_train_result(params))
+            else TrainResult.initial_state(
+                validate=validate,
+                has_metrics_handler=self.metrics_handler is not None,
+            ))
         start_epoch = results.epoch + 1
 
         print_count = 0
@@ -289,19 +272,19 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                     get_batch_info=get_batch_info)
 
                 with torch.set_grad_enabled(True):
-                    result = self._run(
+                    result = self.base_runner.run(BaseRunnerParams(
                         epoch=epoch,
                         is_train=True,
                         dataloader=train_dataloader,
                         model=params.model,
                         criterion=params.criterion,
                         optimizer=params.optimizer,
-                        scheduler=params.scheduler,
+                        scheduler=params.scheduler if not validate else None,
                         clip_grad_max=params.clip_grad_max,
                         hook=params.train_hook,
                         step_only_on_accuracy_loss=params.step_only_on_accuracy_loss,
                         batch_handler=batch_handler,
-                    )
+                    ))
 
                 train_loss = result.total_loss
                 train_accuracy = result.total_accuracy
@@ -352,7 +335,7 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
 
                     with torch.set_grad_enabled(False):
                         assert validation_dataloader is not None
-                        val_result = self._run(
+                        val_result = self.base_runner.run(BaseRunnerParams(
                             epoch=epoch,
                             is_train=False,
                             dataloader=validation_dataloader,
@@ -364,7 +347,7 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                             hook=params.validation_hook,
                             step_only_on_accuracy_loss=params.step_only_on_accuracy_loss,
                             batch_handler=batch_handler,
-                        )
+                        ))
 
                     if val_result:
                         val_loss = val_result.total_loss
@@ -587,7 +570,7 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                 get_batch_info=get_batch_info)
 
             with torch.set_grad_enabled(False):
-                result = self._run(
+                result = self.base_runner.run(BaseRunnerParams(
                     epoch=epoch,
                     is_train=False,
                     dataloader=test_dataloader,
@@ -599,7 +582,7 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                     hook=params.hook,
                     step_only_on_accuracy_loss=False,
                     batch_handler=batch_handler,
-                )
+                ))
 
             if result:
                 loss = result.total_loss
@@ -631,176 +614,6 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                 params, test_results, state_dict)
 
         return test_results
-
-    def calculate_metrics(
-        self,
-        params: MetricsCalculatorInputParams,
-    ) -> dict[str, typing.Any] | None:
-        state_handler = self.state_handler
-        metrics_calculator = self.metrics_calculator
-        save_path = params.save_path
-
-        if not metrics_calculator or not save_path:
-            return None
-
-        info = state_handler.load_state_with_metrics(save_path=save_path)
-
-        if not info:
-            return None
-
-        calc_params = MetricsCalculatorParams(info=info, model=params.model)
-        metrics = metrics_calculator.run(calc_params)
-
-        state_handler.save_metrics(metrics, save_path=save_path)
-
-        return metrics
-
-    def define_as_pending(self, save_path: str) -> None:
-        self.state_handler.define_as_completed(completed=False, save_path=save_path)
-
-    def define_as_completed(self, save_path: str) -> None:
-        self.state_handler.define_as_completed(completed=True, save_path=save_path)
-
-    def _run(
-        self,
-        epoch: int,
-        is_train: bool,
-        dataloader: DataLoader[tuple[I, torch.Tensor]],
-        model: torch.nn.Module,
-        criterion: torch.nn.Module | typing.Callable[[BatchInOutParams[I, O, TG]], torch.Tensor],
-        optimizer: optim.Optimizer | None,
-        scheduler: Scheduler | None,
-        clip_grad_max: float | None,
-        hook: typing.Callable[[GeneralHookParams[I, O, TG]], None] | None,
-        step_only_on_accuracy_loss: bool,
-        batch_handler: BatchHandler,
-    ) -> BatchHandlerResult:
-        if is_train:
-            model.train()
-
-            if not optimizer:
-                raise Exception('optimizer is not defined')
-        else:
-            model.eval()
-
-        result = batch_handler.run(
-            dataloader=dataloader,
-            fn=lambda params: self._run_batch(
-                params=params,
-                epoch=epoch,
-                is_train=is_train,
-                hook=hook,
-                model=model,
-                optimizer=optimizer,
-                criterion=criterion,
-                clip_grad_max=clip_grad_max,
-            ),
-            epoch=epoch,
-            random_seed=self.random_seed)
-
-        if scheduler:
-            new_accuracy = result.total_accuracy
-
-            if new_accuracy is None:
-                scheduler.step()
-            else:
-                best_accuracy = batch_handler.best_accuracy
-                worse_accuracy = (
-                    new_accuracy is not None
-                    and best_accuracy is not None
-                    and best_accuracy > new_accuracy)
-
-                if worse_accuracy or not step_only_on_accuracy_loss:
-                    scheduler.step()
-
-        return result
-
-    def _run_batch(
-        self,
-        params: BatchHandlerRunParams[tuple[I, TG]],
-        epoch: int,
-        is_train: bool,
-        model: torch.nn.Module,
-        criterion: torch.nn.Module | typing.Callable[[BatchInOutParams[I, O, TG]], torch.Tensor],
-        optimizer: optim.Optimizer | None,
-        clip_grad_max: float | None,
-        hook: typing.Callable[[GeneralHookParams[I, O, TG]], None] | None,
-    ) -> BatchHandlerData[I, O, TG]:
-        executor = self.executor
-        accuracy_calculator = self.accuracy_calculator
-
-        data = params.data
-        batch = params.batch
-        amount = params.amount
-
-        input_batch, target_batch = data
-        current_amount: int = len(target_batch)
-
-        if not current_amount:
-            raise Exception('Empty batch')
-
-        if is_train and optimizer:
-            optimizer.zero_grad()
-
-        # call the model with the input and retrieve the output
-        executor_params = BatchExecutorParams(
-            model=model,
-            input=input_batch)
-        output = executor.run(executor_params)
-
-        if isinstance(criterion, nn.Module):
-            loss: torch.Tensor = criterion(output, target_batch)
-        else:
-            loss_params = BatchInOutParams(
-                input=input_batch,
-                output=output,
-                target=target_batch)
-            loss = criterion(loss_params)
-
-        loss_value = loss.item()
-
-        if math.isnan(loss_value):
-            raise Exception('The loss is NaN')
-
-        if is_train:
-            loss.backward() # type: ignore
-
-            if clip_grad_max is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(),
-                    clip_grad_max)
-
-            if optimizer:
-                optimizer.step()
-
-        with torch.no_grad():
-            if accuracy_calculator is not None:
-                accuracy_params = BatchAccuracyParams(
-                    input=input_batch,
-                    output=output,
-                    target=target_batch)
-                batch_accuracy = accuracy_calculator.run(accuracy_params)
-            else:
-                batch_accuracy = None
-
-            if hook:
-                hook(GeneralHookParams(
-                    epoch=epoch,
-                    batch=batch,
-                    current_amount=amount + current_amount,
-                    loss=loss_value,
-                    accuracy=batch_accuracy,
-                    target=target_batch,
-                    input=input_batch,
-                    output=output))
-
-        return BatchHandlerData(
-            amount=current_amount,
-            loss=loss_value,
-            accuracy=batch_accuracy,
-            input=input_batch,
-            output=output,
-            target=target_batch)
 
 ####################################################
 ################ Private Functions #################

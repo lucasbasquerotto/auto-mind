@@ -285,6 +285,42 @@ class TrainResult(BaseResult):
             batch_train_cursor=batch_train_cursor,
             batch_val_cursor=batch_val_cursor)
 
+    @classmethod
+    def initial_state(cls, validate: bool, has_metrics_handler: bool) -> typing.Self:
+        return cls(
+            epoch=0,
+            early_stopped=False,
+            early_stopped_max_epochs=0,
+            train_batch=0,
+            train_total_batch=None,
+            val_batch=0,
+            val_total_batch=None,
+            last_loss=0.0,
+            last_accuracy=0.0,
+            last_metrics=None,
+            last_train_loss=0.0,
+            last_train_accuracy=0.0,
+            last_train_metrics=None,
+            last_val_loss=0.0,
+            last_val_accuracy=0.0,
+            last_val_metrics=None,
+            best_epoch=0,
+            best_accuracy=0.0,
+            best_train_accuracy=0.0,
+            best_val_accuracy=0.0,
+            total_train_time=0,
+            total_val_time=0,
+            accuracies=[],
+            losses=[],
+            times=[],
+            metrics=[] if has_metrics_handler else None,
+            val_accuracies=[] if validate else None,
+            val_losses=[] if validate else None,
+            val_times=[] if validate else None,
+            val_metrics=[] if validate and has_metrics_handler else None)
+
+
+
 class TestResult(BaseResult):
     def __init__(
         self,
