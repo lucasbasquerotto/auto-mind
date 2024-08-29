@@ -18,16 +18,12 @@ O = typing.TypeVar("O")
 TG = typing.TypeVar("TG", bound=typing.Sized)
 MT = typing.TypeVar("MT")
 
-####################################################
-############### General Action Impl ################
-####################################################
-
 class BaseRunnerParams(typing.Generic[I, O, TG]):
     def __init__(
         self,
         epoch: int,
         is_train: bool,
-        dataloader: DataLoader[tuple[I, torch.Tensor]],
+        dataloader: DataLoader[tuple[I, TG]],
         model: torch.nn.Module,
         criterion: torch.nn.Module | typing.Callable[[BatchInOutParams[I, O, TG]], torch.Tensor],
         optimizer: optim.Optimizer | None,
@@ -50,6 +46,18 @@ class BaseRunnerParams(typing.Generic[I, O, TG]):
         self.batch_handler = batch_handler
 
 class BaseRunner(typing.Generic[I, O, TG, MT]):
+    """
+    Base class for running training and evaluation loops.
+
+    This class provides the basic structure and methods for running training
+    and evaluation loops in machine learning workflows. It handles the
+    initialization, execution, and finalization of these loops, and can be
+    extended to implement specific training and evaluation logic.
+
+    Methods:
+        run() -> BatchHandlerResult:
+            Runs the training and evaluation loops.
+    """
     def __init__(
         self,
         random_seed: int | None,
@@ -57,10 +65,10 @@ class BaseRunner(typing.Generic[I, O, TG, MT]):
         accuracy_calculator: BatchAccuracyCalculator[I, O, TG] | None,
         metrics_handler: MetricsHandler[I, O, TG, MT] | None,
     ):
-        self.metrics_handler = metrics_handler
-        self.random_seed = random_seed
-        self.executor = executor
-        self.accuracy_calculator = accuracy_calculator
+        self._metrics_handler = metrics_handler
+        self._random_seed = random_seed
+        self._executor = executor
+        self._accuracy_calculator = accuracy_calculator
 
     def run(self, params: BaseRunnerParams[I, O, TG]) -> BatchHandlerResult:
         epoch = params.epoch
@@ -85,7 +93,7 @@ class BaseRunner(typing.Generic[I, O, TG, MT]):
 
         batch_handler.verify_early_stop()
 
-        random_seed = (self.random_seed or 1) * (epoch + 1)
+        random_seed = (self._random_seed or 1) * (epoch + 1)
         torch.manual_seed(random_seed)
 
         def get_len(dataloader: typing.Iterable[I]) -> int | None:
@@ -103,7 +111,7 @@ class BaseRunner(typing.Generic[I, O, TG, MT]):
         start_time = time.time()
         out: BatchHandlerData[I, typing.Any, typing.Any] | None = None
 
-        metrics_handler = self.metrics_handler
+        metrics_handler = self._metrics_handler
 
         def update_batch_results(last: bool) -> None:
             nonlocal start_time
@@ -143,6 +151,7 @@ class BaseRunner(typing.Generic[I, O, TG, MT]):
             batch += 1
 
             if batch_handler.skip(batch):
+                # skip the batch (was already processed previously)
                 continue
 
             out = self._run_batch(
@@ -214,8 +223,8 @@ class BaseRunner(typing.Generic[I, O, TG, MT]):
         clip_grad_max: float | None,
         hook: typing.Callable[[GeneralHookParams[I, O, TG]], None] | None,
     ) -> BatchHandlerData[I, O, TG]:
-        executor = self.executor
-        accuracy_calculator = self.accuracy_calculator
+        executor = self._executor
+        accuracy_calculator = self._accuracy_calculator
 
         data = params.data
         batch = params.batch

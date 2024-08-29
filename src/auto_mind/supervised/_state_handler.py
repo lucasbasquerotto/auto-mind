@@ -15,6 +15,24 @@ ATE = typing.TypeVar("ATE", bound=TestParams[
     typing.Any, typing.Any, typing.Any, typing.Any])
 
 class StateHandler(typing.Generic[ATR, ATE]):
+    """
+    A class to handle the state management during training and evaluation.
+
+    This class is responsible for managing and updating the state information
+    throughout the training and evaluation processes. It provides methods to
+    initialize, update and retrieve the state as needed.
+
+    Methods:
+        info(): Retrieve the state information from the save path.
+        load_train_state(): Load the training state from the save path.
+        save_train_state(): Save the training state to the save path.
+        load_test_state(): Load the test state from the save path.
+        save_test_state(): Save the test state to the save path.
+        load_eval_state(): Load the evaluation state from the save path.
+        load_state_with_metrics(): Load the state with metrics from the save path.
+        save_metrics(): Save the metrics to the save path.
+        define_as_completed(): Define the training state as pending or completed.
+    """
     def __init__(self, use_best: bool):
         def get_eval_state(
             params: EvalParams,

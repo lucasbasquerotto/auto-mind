@@ -19,14 +19,33 @@ I = typing.TypeVar("I", bound=typing.Sized)
 O = typing.TypeVar("O")
 TG = typing.TypeVar("TG", bound=typing.Sized)
 MT = typing.TypeVar("MT")
-ATR = typing.TypeVar("ATR", bound=TrainParams[typing.Any, typing.Any, typing.Any, typing.Any])
-ATE = typing.TypeVar("ATE", bound=TestParams[typing.Any, typing.Any, typing.Any, typing.Any])
 
 ####################################################
 ################## General Action ##################
 ####################################################
 
 class GeneralAction(typing.Generic[I, O, TG, MT]):
+    """
+    A class to represent a general action in a supervised learning context.
+
+    This class encapsulates the logic for performing actions such as training,
+    evaluation, and prediction in a supervised learning workflow. It handles
+    the execution of these actions and manages the associated states and results.
+
+    Methods:
+        train(params: TrainParams) -> TrainResult | None:
+            Trains the model using the provided parameters.
+        test(params: TestParams) -> TestResult | None:
+            Tests the model using the provided parameters.
+        load_eval_state(params: EvalParams) -> None:
+            Loads the evaluation state using the provided parameters.
+        info(save_path: str) -> StateWithMetrics | None:
+            Returns the state with metrics for the provided save path.
+        define_as_pending(save_path: str) -> None:
+            Defines the training state as pending for the provided save path.
+        define_as_completed(save_path: str) -> None:
+            Defines the training state as completed for the provided save path.
+    """
     def __init__(
         self,
         random_seed: int | None,
@@ -48,24 +67,24 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
             metrics_handler=metrics_handler,
         )
 
-        self.state_handler = main_state_handler
-        self.metrics_handler = metrics_handler
-        self.metrics_calculator = metrics_calculator
-        self.base_runner = base_runner
+        self._state_handler = main_state_handler
+        self._metrics_handler = metrics_handler
+        self._metrics_calculator = metrics_calculator
+        self._base_runner = base_runner
 
     def load_eval_state(self, params: EvalParams) -> None:
-        self.state_handler.load_eval_state(params)
+        self._state_handler.load_eval_state(params)
 
     def info(self, save_path: str) -> StateWithMetrics | None:
-        return self.state_handler.info(save_path=save_path)
+        return self._state_handler.info(save_path=save_path)
 
     def define_as_pending(self, save_path: str) -> None:
-        self.state_handler.define_as_completed(completed=False, save_path=save_path)
+        self._state_handler.define_as_completed(completed=False, save_path=save_path)
 
     def define_as_completed(self, save_path: str) -> None:
-        self.state_handler.define_as_completed(completed=True, save_path=save_path)
+        self._state_handler.define_as_completed(completed=True, save_path=save_path)
 
-    def can_run(self, early_stopper: EarlyStopper | None) -> bool:
+    def _can_run(self, early_stopper: EarlyStopper | None) -> bool:
         if not early_stopper:
             return True
 
@@ -75,8 +94,8 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
         self,
         params: MetricsCalculatorInputParams,
     ) -> dict[str, typing.Any] | None:
-        state_handler = self.state_handler
-        metrics_calculator = self.metrics_calculator
+        state_handler = self._state_handler
+        metrics_calculator = self._metrics_calculator
         save_path = params.save_path
 
         if not metrics_calculator or not save_path:
@@ -94,8 +113,8 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
 
         return metrics
 
-    def train(self, params: ATR) -> TrainResult | None:
-        full_state, _ = self.state_handler.load_train_state(params)
+    def train(self, params: TrainParams[I, O, TG, MT]) -> TrainResult | None:
+        full_state, _ = self._state_handler.load_train_state(params)
         results: TrainResult | None = full_state.train_results if full_state else None
 
         try:
@@ -106,13 +125,13 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
         except AbortedException:
             return None
 
-    def test(self, params: ATE) -> TestResult | None:
+    def test(self, params: TestParams[I, O, TG, MT]) -> TestResult | None:
         try:
             return self._test(params)
         except AbortedException:
             return None
 
-    def _train(self, params: ATR) -> TrainResult:
+    def _train(self, params: TrainParams[I, O, TG, MT]) -> TrainResult:
         epochs = params.epochs
         batch_interval = params.batch_interval
         save_every = params.save_every
@@ -124,13 +143,13 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
         validation_dataloader = params.validation_dataloader
         validate = validation_dataloader is not None
 
-        full_state, state_dict = self.state_handler.load_train_state(params)
+        full_state, state_dict = self._state_handler.load_train_state(params)
         results: TrainResult = (
             full_state.train_results
             if full_state
             else TrainResult.initial_state(
                 validate=validate,
-                has_metrics_handler=self.metrics_handler is not None,
+                has_metrics_handler=self._metrics_handler is not None,
             ))
         start_epoch = results.epoch + 1
 
@@ -162,7 +181,7 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
         val_metrics: typing.Any | None = None
 
         get_batch_info = params.get_batch_info if params.get_batch_info else default_batch_info
-        metrics_handler = self.metrics_handler
+        metrics_handler = self._metrics_handler
 
         def update_results() -> None:
             results.epoch = epoch
@@ -242,7 +261,7 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                             results.early_stopped = True
                             results.early_stopped_max_epochs = epochs
 
-                        self.state_handler.save_train_state(
+                        self._state_handler.save_train_state(
                             params,
                             results,
                             state_dict)
@@ -265,14 +284,14 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                     epoch=epoch,
                     params=params,
                     results=results,
-                    save_state=lambda result: self.state_handler.save_train_state(
+                    save_state=lambda result: self._state_handler.save_train_state(
                         params, result, state_dict),
                     early_stopper=early_stopper,
                     metrics_handler=metrics_handler,
                     get_batch_info=get_batch_info)
 
                 with torch.set_grad_enabled(True):
-                    result = self.base_runner.run(BaseRunnerParams(
+                    result = self._base_runner.run(BaseRunnerParams(
                         epoch=epoch,
                         is_train=True,
                         dataloader=train_dataloader,
@@ -327,7 +346,7 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                         epoch=epoch,
                         params=params,
                         results=results,
-                        save_state=lambda result: self.state_handler.save_train_state(
+                        save_state=lambda result: self._state_handler.save_train_state(
                             params, result, state_dict),
                         early_stopper=early_stopper,
                         metrics_handler=metrics_handler,
@@ -335,7 +354,7 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
 
                     with torch.set_grad_enabled(False):
                         assert validation_dataloader is not None
-                        val_result = self.base_runner.run(BaseRunnerParams(
+                        val_result = self._base_runner.run(BaseRunnerParams(
                             epoch=epoch,
                             is_train=False,
                             dataloader=validation_dataloader,
@@ -505,7 +524,7 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                         val_metrics = None
 
                     if do_save:
-                        self.state_handler.save_train_state(
+                        self._state_handler.save_train_state(
                             params,
                             results,
                             state_dict)
@@ -517,22 +536,22 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
 
         return results
 
-    def _test(self, params: ATE) -> TestResult:
-        test_state, state_dict = self.state_handler.load_test_state(params)
+    def _test(self, params: TestParams[I, O, TG, MT]) -> TestResult:
+        test_state, state_dict = self._state_handler.load_test_state(params)
         train_results = test_state.train_results if test_state else None
         epoch = (train_results.epoch or 0) if train_results else 0
         test_results: TestResult | None = test_state.test_results if test_state else None
         test_epoch = test_results.epoch if test_results else None
 
         early_stopper = params.early_stopper
-        metrics_handler = self.metrics_handler
+        metrics_handler = self._metrics_handler
 
         get_batch_info = params.get_batch_info if params.get_batch_info else default_batch_info
 
         test_dataloader = params.dataloader
         assert test_dataloader is not None, 'the test dataloader is empty'
 
-        if not self.can_run(early_stopper):
+        if not self._can_run(early_stopper):
             raise AbortedException()
 
         if (
@@ -563,14 +582,14 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
             batch_handler = TestBatchHandler(
                 params=params,
                 results=test_results,
-                save_state=lambda result: self.state_handler.save_test_state(
+                save_state=lambda result: self._state_handler.save_test_state(
                     params, result, state_dict),
                 early_stopper=early_stopper,
                 metrics_handler=metrics_handler,
                 get_batch_info=get_batch_info)
 
             with torch.set_grad_enabled(False):
-                result = self.base_runner.run(BaseRunnerParams(
+                result = self._base_runner.run(BaseRunnerParams(
                     epoch=epoch,
                     is_train=False,
                     dataloader=test_dataloader,
@@ -610,7 +629,7 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
             raise Exception('the test returned no result')
 
         if test_state and test_results:
-            self.state_handler.save_test_state(
+            self._state_handler.save_test_state(
                 params, test_results, state_dict)
 
         return test_results

@@ -21,14 +21,6 @@ MT = typing.TypeVar("MT")
 
 S = typing.TypeVar("S", bound=BaseResult)
 
-ATR = typing.TypeVar("ATR", bound=TrainParams[
-    typing.Any, typing.Any, typing.Any, typing.Any])
-ATE = typing.TypeVar("ATE", bound=TestParams[
-    typing.Any, typing.Any, typing.Any, typing.Any])
-
-AWP = typing.TypeVar("AWP")
-AWS = typing.TypeVar("AWS")
-
 class BatchHandlerRunParams(typing.Generic[I]):
     def __init__(self, data: I, batch: int, amount: int):
         self.data = data
@@ -95,6 +87,30 @@ class BatchHandlerResult:
         self.total_metrics = total_metrics
 
 class BatchHandler():
+    """
+    Base class for handling batch operations during an epoch.
+
+    This class is responsible for updating batch metrics and states after each batch
+    is processed during an epoch. It provides the necessary methods to manage and
+    track the progress and results of batch operations.
+
+    Attributes:
+        amount: The total amount of data processed (for each item in each processed batch).
+        total_loss: The total loss of the processed data (per item).
+        total_accuracy: The total accuracy of the processed data (mean of the accuracies).
+        total_time: The total time spent processing the data (in milliseconds, per batch).
+        total_metrics: The total metrics of the processed data (processed per batch, customized).
+        best_accuracy: The best accuracy achieved during the entire run.
+
+    Methods:
+        verify_early_stop() -> None:
+            Raises an AbortedException if the run should be aborted.
+        skip() -> bool:
+            Returns True if the batch should be skipped (if it was already processed),
+            False otherwise.
+        run() -> None:
+            Processes the data from a batch, updating the internal state with the new data.
+    """
     def __init__(
         self,
         cursor: ExecutionCursor | None,
@@ -106,16 +122,18 @@ class BatchHandler():
         self.total_accuracy = cursor.total_accuracy if cursor else 0.0
         self.total_time: int = cursor.total_time if cursor else 0
         self.total_metrics = cursor.total_metrics if cursor else None
-        self.metrics_handler = metrics_handler
         self.best_accuracy = best_accuracy
+
+        self._metrics_handler = metrics_handler
 
     def verify_early_stop(self) -> None:
         """
-        Raises exception if the run should be aborted.
+        Raises an AbortedException if the run should be aborted.
         """
+        return
 
     def skip(self, batch: int) -> bool: # pylint: disable=unused-argument
-        return True
+        raise NotImplementedError()
 
     def run(
         self,
@@ -130,7 +148,7 @@ class BatchHandler():
     ) -> None:
         raise NotImplementedError()
 
-    def handle_main(
+    def _handle_main(
         self,
         amount: int,
         loss: float,
@@ -148,8 +166,8 @@ class BatchHandler():
 
         self.total_time += time_diff
 
-        if self.metrics_handler and batch_metrics:
-            self.total_metrics = self.metrics_handler.add(self.total_metrics, batch_metrics)
+        if self._metrics_handler and batch_metrics:
+            self.total_metrics = self._metrics_handler.add(self.total_metrics, batch_metrics)
 
 class GeneralBatchHandlerParams:
     def __init__(
@@ -250,30 +268,10 @@ class GeneralBatchHandler(BatchHandler):
         time_diff: int,
         batch_metrics: typing.Any | None,
     ) -> None:
-        if not self.skip(batch):
-            self._run(
-                batch=batch,
-                total_batch=total_batch,
-                amount=amount,
-                last=last,
-                loss=loss,
-                accuracy=accuracy,
-                time_diff=time_diff,
-                batch_metrics=batch_metrics,
-            )
+        if self.skip(batch):
+            return
 
-    def _run(
-        self,
-        batch: int,
-        total_batch: int | None,
-        amount: int,
-        last: bool,
-        loss: float,
-        accuracy: float | None,
-        time_diff: int,
-        batch_metrics: typing.Any | None,
-    ) -> None:
-        super().handle_main(
+        super()._handle_main(
             amount=amount,
             loss=loss,
             accuracy=accuracy,
@@ -286,7 +284,7 @@ class GeneralBatchHandler(BatchHandler):
         update_results = self._update_results
         print_prefix = self._print_prefix
         save_state = self._save_state
-        metrics_handler = self.metrics_handler
+        metrics_handler = self._metrics_handler
 
         self._print_loss += loss / amount
         if accuracy is not None and self._print_accuracy is not None:
@@ -399,12 +397,12 @@ class GeneralBatchHandler(BatchHandler):
             if do_save:
                 save_state()
 
-class TrainBatchHandler(GeneralBatchHandler, typing.Generic[ATR]):
+class TrainBatchHandler(GeneralBatchHandler, typing.Generic[I, O, TG, MT]):
     def __init__(
         self,
         validation: bool,
         epoch: int,
-        params: ATR,
+        params: TrainParams[I, O, TG, MT],
         results: TrainResult,
         get_batch_info: typing.Callable[[TrainBatchInfo[typing.Any]], str],
         save_state: typing.Callable[[TrainResult], None],
@@ -534,17 +532,17 @@ class TrainBatchHandler(GeneralBatchHandler, typing.Generic[ATR]):
                 time_diff=time_diff,
                 batch_metrics=batch_metrics)
         else:
-            super().handle_main(
+            super()._handle_main(
                 amount=amount,
                 loss=loss,
                 accuracy=accuracy,
                 time_diff=time_diff,
                 batch_metrics=batch_metrics)
 
-class TestBatchHandler(GeneralBatchHandler, typing.Generic[ATE]):
+class TestBatchHandler(GeneralBatchHandler, typing.Generic[I, O, TG, MT]):
     def __init__(
         self,
-        params: ATE,
+        params: TestParams[I, O, TG, MT],
         results: TestResult,
         get_batch_info: typing.Callable[[TrainBatchInfo[typing.Any]], str],
         save_state: typing.Callable[[TestResult], None],
