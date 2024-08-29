@@ -78,8 +78,7 @@ class AccuracyEarlyStopper(TrainEarlyStopper[MT], typing.Generic[MT]):
         return self
 
 class OptimizerChain(optim.Optimizer):
-    def __init__(self, optimizers: list[optim.Optimizer]) -> None:
-        super().__init__(params=[], defaults=dict())
+    def __init__(self, optimizers: list[optim.Optimizer]) -> None: # pylint: disable=super-init-not-called
         self.optimizers: list[optim.Optimizer] = optimizers
 
     def zero_grad(self, set_to_none: bool = True) -> None:
