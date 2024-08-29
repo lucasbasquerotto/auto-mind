@@ -31,7 +31,7 @@ from ._action_handlers import (
     AllProbsEvaluator,
     ValuesEvaluator,
 )
-from ._batch_handlers import (
+from ._batch_handler import (
     MetricsHandlerInput,
     MetricsHandler,
     TensorMetricsHandler,

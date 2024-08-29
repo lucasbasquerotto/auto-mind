@@ -13,7 +13,7 @@ from auto_mind.supervised._action_data import (
 from auto_mind.supervised._action_handlers import (
     BatchAccuracyCalculator, BatchExecutor, Evaluator, EvaluatorParams,
     MetricsCalculatorInputParams, MetricsCalculator)
-from auto_mind.supervised._batch_handlers import MetricsHandler
+from auto_mind.supervised._batch_handler import MetricsHandler
 from auto_mind.supervised._action import GeneralAction
 
 I = typing.TypeVar("I", bound=typing.Sized)

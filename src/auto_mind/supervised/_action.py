@@ -15,8 +15,8 @@ from auto_mind.supervised._action_handlers import (
     BatchExecutor, BatchAccuracyCalculator, BatchExecutorParams, BatchAccuracyParams,
     MetricsCalculator, MetricsCalculatorInputParams, MetricsCalculatorParams,
     AbortedException)
-from auto_mind.supervised._state_handlers import StateHandler
-from auto_mind.supervised._batch_handlers import (
+from auto_mind.supervised._state_handler import StateHandler
+from auto_mind.supervised._batch_handler import (
     BatchHandlerData, MetricsHandler, BatchHandler, BatchHandlerResult,
     TrainBatchHandler, TestBatchHandler, BatchHandlerRunParams)
 
