@@ -12,3 +12,9 @@ disable=
     missing-module-docstring,
     missing-class-docstring,
     missing-function-docstring,
+    too-many-arguments,
+    too-few-public-methods,
+    too-many-instance-attributes,
+    too-many-locals,
+    too-many-statements,
+    use-dict-literal

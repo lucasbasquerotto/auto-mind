@@ -48,6 +48,16 @@ jobs:
         pip install ruff
         ruff check --output-format=github .
       continue-on-error: false
+    - name: Lint with Pylint
+      run: |
+        pip install pylint
+        pylint --rcfile=./.pylintrc ./src
+      continue-on-error: false
+    - name: Type check with MyPy
+      run: |
+        pip install mypy
+        mypy --config-file=mypy.ini ./src
+      continue-on-error: false
     - name: Test with pytest
       run: |
         pip install pytest pytest-cov

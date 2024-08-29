@@ -98,9 +98,9 @@ class DatasetGroup(Dataset[I], Generic[I]):
         if train_ok and validation_ok and test_ok:
             return self
 
-        train_list = [d for d in self.train]
-        validation_list = [d for d in self.validation] if self.validation else None
-        test_list = [d for d in self.test] if self.test else None
+        train_list = [d for d in self.train] # pylint: disable=unnecessary-comprehension
+        validation_list = [d for d in self.validation] if self.validation else None # pylint: disable=unnecessary-comprehension
+        test_list = [d for d in self.test] if self.test else None # pylint: disable=unnecessary-comprehension
 
         return self.__class__(
             train=ItemsDataset(train_list),

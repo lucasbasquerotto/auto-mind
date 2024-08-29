@@ -1,4 +1,6 @@
 # ruff: noqa: E741 (ambiguous variable name)
+# pylint: disable=too-many-branches
+# pylint: disable=too-many-nested-blocks
 import time
 import math
 import typing
@@ -229,7 +231,8 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
             else:
                 print(f'Training already completed ({epochs} epochs).')
 
-        def verify_early_stop(force_save: bool) -> TrainResult | None:
+        def verify_early_stop(new_iteration: bool) -> TrainResult | None:
+            nonlocal epoch
             early_stopper = params.early_stopper
 
             if early_stopper:
@@ -244,7 +247,7 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                         (finished and (not results.early_stopped))
                         or
                         (
-                            force_save
+                            new_iteration
                             and
                             stopped
                             and
@@ -255,11 +258,11 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                     )
 
                     if save_result:
+                        epoch = (epoch - 1) if new_iteration else epoch
                         update_results()
 
                         if finished:
                             results.early_stopped = True
-                            results.early_stopped_max_epochs = epochs
 
                         self._state_handler.save_train_state(
                             params,
@@ -268,14 +271,14 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
 
                     if finished:
                         return results
-                    else:
-                        raise AbortedException()
+
+                    raise AbortedException()
 
             return None
 
         try:
             for epoch in range(start_epoch, epochs + 1):
-                r = verify_early_stop(force_save=True)
+                r = verify_early_stop(new_iteration=True)
                 if r:
                     return r
 
@@ -449,10 +452,10 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                         params.get_epoch_info
                         if params.get_epoch_info else
                         default_epoch_info)
-                    print_str = get_epoch_info(info)
+                    print_info = get_epoch_info(info)
 
-                    if print_str:
-                        print(print_str)
+                    if print_info:
+                        print(print_info)
 
                     print_count = 0
                     print_loss = 0
@@ -529,7 +532,7 @@ class GeneralAction(typing.Generic[I, O, TG, MT]):
                             results,
                             state_dict)
         except AbortedException as e:
-            r = verify_early_stop(force_save=False)
+            r = verify_early_stop(new_iteration=False)
             if r:
                 return r
             raise e

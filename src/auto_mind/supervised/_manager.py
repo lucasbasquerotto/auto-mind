@@ -7,7 +7,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from auto_mind.supervised._dataset import DatasetGroup
 from auto_mind.supervised._action_data import (
-    Scheduler, EarlyStopper, EvalParams, TrainEpochInfo,
+    I, O, TG, MT, Scheduler, EarlyStopper, EvalParams, TrainEpochInfo,
     TrainBatchInfo, TrainResult, TestResult, BatchInOutParams, GeneralHookParams,
     TrainParams, TestParams)
 from auto_mind.supervised._action_handlers import (
@@ -16,11 +16,6 @@ from auto_mind.supervised._action_handlers import (
 from auto_mind.supervised._batch_handler import MetricsHandler
 from auto_mind.supervised._action import GeneralAction
 
-I = typing.TypeVar("I", bound=typing.Sized)
-O = typing.TypeVar("O")
-T = typing.TypeVar("T")
-TG = typing.TypeVar("TG", bound=typing.Sized)
-MT = typing.TypeVar("MT")
 EI = typing.TypeVar("EI")
 EO = typing.TypeVar("EO")
 DI = typing.TypeVar("DI")

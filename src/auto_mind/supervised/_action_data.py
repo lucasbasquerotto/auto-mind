@@ -95,7 +95,6 @@ class TrainResult(BaseResult):
         self,
         epoch: int,
         early_stopped: bool,
-        early_stopped_max_epochs: int,
         train_batch: int,
         train_total_batch: int | None,
         val_batch: int,
@@ -137,7 +136,6 @@ class TrainResult(BaseResult):
     ):
         self.epoch = epoch
         self.early_stopped = early_stopped
-        self.early_stopped_max_epochs = early_stopped_max_epochs
         self.train_batch = train_batch
         self.train_total_batch = train_total_batch
         self.val_batch = val_batch
@@ -181,7 +179,6 @@ class TrainResult(BaseResult):
         return dict(
             epoch=self.epoch,
             early_stopped=self.early_stopped,
-            early_stopped_max_epochs=self.early_stopped_max_epochs,
             train_batch=self.train_batch,
             train_total_batch=self.train_total_batch,
             val_batch=self.val_batch,
@@ -245,7 +242,6 @@ class TrainResult(BaseResult):
         return TrainResult(
             epoch=state_props['epoch'],
             early_stopped=state_props['early_stopped'],
-            early_stopped_max_epochs=state_props['early_stopped_max_epochs'],
             train_batch=state_props['train_batch'],
             train_total_batch=state_props['train_total_batch'],
             val_batch=state_props['val_batch'],
@@ -290,7 +286,6 @@ class TrainResult(BaseResult):
         return cls(
             epoch=0,
             early_stopped=False,
-            early_stopped_max_epochs=0,
             train_batch=0,
             train_total_batch=None,
             val_batch=0,

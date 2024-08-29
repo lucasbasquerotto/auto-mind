@@ -1,9 +1,10 @@
 # ruff: noqa: E741 (ambiguous variable name)
+# pylint: disable=too-many-branches
 import time
 import math
 import typing
 import torch
-import torch.nn as nn
+from torch import nn
 from torch import optim
 from torch.utils.data import DataLoader
 from auto_mind.supervised._action_data import Scheduler, BatchInOutParams, GeneralHookParams

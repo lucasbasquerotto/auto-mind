@@ -11,7 +11,8 @@ def test_supervised() -> None:
     import torch
     from auto_mind import supervised # type: ignore[import-untyped]
     from auto_mind.supervised.handlers import ( # type: ignore[import-untyped]
-        GeneralBatchExecutor, MaxProbBatchEvaluator, GeneralBatchAccuracyCalculator)
+        GeneralBatchExecutor, MaxProbBatchEvaluator, GeneralBatchAccuracyCalculator,
+        AccuracyEarlyStopper)
     from auto_mind.supervised.data import SplitData, ItemsDataset # type: ignore[import-untyped]
 
     # Define a simple neural network model
@@ -29,7 +30,7 @@ def test_supervised() -> None:
     hidden_size = 128
     num_classes = 3
     num_samples = 100
-    epochs = 2
+    epochs = 5
     seed = 1
 
     # Generate synthetic data
@@ -63,6 +64,7 @@ def test_supervised() -> None:
         ),
         optimizer_params=supervised.ManagerOptimizerParams(
             optimizer=torch.optim.Adam(model.parameters(), lr=0.01),
+            train_early_stopper=AccuracyEarlyStopper(min_accuracy=0.99, patience=3)
         ),
         metrics_params=supervised.ManagerMetricsParams(
             evaluator=MaxProbBatchEvaluator(executor=GeneralBatchExecutor()),
@@ -79,7 +81,11 @@ def test_supervised() -> None:
     info = manager.train(epochs=epochs)
 
     assert info is not None, 'Info should not be None'
+    assert info.train_results is not None, 'Train results should not be None'
     assert info.test_results is not None, 'Test results should not be None'
+
+    early_stopped_suffix = ' (early stopped)' if info.train_results.early_stopped else ''
+    print(f'Finished training after {info.train_results.epoch} epochs{early_stopped_suffix}')
 
     accuracy = info.test_results.accuracy
     if accuracy is not None:

@@ -29,9 +29,11 @@ Below is a demo example of how to set up and train a supervised learning model u
 
 ```python
 import torch
-from auto_mind import supervised
-from auto_mind.supervised.handlers import GeneralBatchExecutor, MaxProbBatchEvaluator, GeneralBatchAccuracyCalculator
-from auto_mind.supervised.data import SplitData, ItemsDataset
+from auto_mind import supervised # type: ignore[import-untyped]
+from auto_mind.supervised.handlers import ( # type: ignore[import-untyped]
+    GeneralBatchExecutor, MaxProbBatchEvaluator, GeneralBatchAccuracyCalculator,
+    AccuracyEarlyStopper)
+from auto_mind.supervised.data import SplitData, ItemsDataset # type: ignore[import-untyped]
 
 # Define a simple neural network model
 class SimpleNN(torch.nn.Module):
@@ -40,7 +42,7 @@ class SimpleNN(torch.nn.Module):
         self.fc1 = torch.nn.Linear(input_size, hidden_size)
         self.fc2 = torch.nn.Linear(hidden_size, num_classes)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = torch.relu(self.fc1(x))
         return torch.softmax(self.fc2(x), dim=1)
 
@@ -48,18 +50,21 @@ input_size = 10
 hidden_size = 128
 num_classes = 3
 num_samples = 100
-epochs = 2
+epochs = 5
 seed = 1
 
 # Generate synthetic data
-def sample(idx: int):
+def sample(idx: int) -> tuple[torch.Tensor, int]:
     y = idx % num_classes
     x = [float((j+1)%(y+1) == 0) for j in range(input_size)]
     return torch.tensor(x), y
 
 full_dataset = ItemsDataset([sample(i) for i in range(num_samples)])
 
-datasets = SplitData(val_percent=0.1, test_percent=0.1).split(full_dataset, shuffle=True, random_seed=seed)
+datasets = SplitData(val_percent=0.1, test_percent=0.1).split(
+    full_dataset,
+    shuffle=True,
+    random_seed=seed)
 
 torch.manual_seed(seed)
 
@@ -79,6 +84,7 @@ manager = supervised.Manager(
     ),
     optimizer_params=supervised.ManagerOptimizerParams(
         optimizer=torch.optim.Adam(model.parameters(), lr=0.01),
+        train_early_stopper=AccuracyEarlyStopper(min_accuracy=0.99, patience=3)
     ),
     metrics_params=supervised.ManagerMetricsParams(
         evaluator=MaxProbBatchEvaluator(executor=GeneralBatchExecutor()),
@@ -95,12 +101,17 @@ manager = supervised.Manager(
 info = manager.train(epochs=epochs)
 
 assert info is not None, 'Info should not be None'
+assert info.train_results is not None, 'Train results should not be None'
 assert info.test_results is not None, 'Test results should not be None'
 
+early_stopped_suffix = ' (early stopped)' if info.train_results.early_stopped else ''
+print(f'Finished training after {info.train_results.epoch} epochs{early_stopped_suffix}')
+
 accuracy = info.test_results.accuracy
-min_acc = 0.999
-print(f'Test Accuracy: {accuracy * 100:.2f}%')
-assert accuracy > min_acc, f'Test Accuracy ({accuracy * 100:.2f}%) should be more than {min_acc * 100:.2f}%'
+if accuracy is not None:
+    min_acc = 0.999
+    print(f'Test Accuracy: {accuracy * 100:.2f}%')
+    assert accuracy > min_acc, f'Test Accuracy ({accuracy * 100:.2f}%) should be more than {min_acc * 100:.2f}%' # pylint: disable=line-too-long
 
 assert datasets.test is not None, 'Test dataset should not be None'
 X_test = torch.stack([x for x, _ in datasets.test])
@@ -124,9 +135,9 @@ The [TorchVision Object Detection Finetuning Tutorial](https://github.com/lucasb
 
 The manager expects a single model. If more than one model is trained for a task, they should be included as components of a larger model. The manager also expects a single optimizer, and an [OptimizerChain](/src/auto_mind/supervised/_action_handlers.py#L80) can be used to allow several optimizers.
 
-The example [NLP From Scratch: Translation with a Sequence to Sequence Network and Attention](https://github.com/lucasbasquerotto/auto-mind-examples/blob/main/supervised/seq2seq_translation.ipynb), from the examples repository, has the encoder and decoder used together in the `EncoderDecoder` model class, and an optimizer chain with both the encoder and decoder optimizers.
+For reference, the example [NLP From Scratch: Translation with a Sequence to Sequence Network and Attention](https://github.com/lucasbasquerotto/auto-mind-examples/blob/main/supervised/seq2seq_translation.ipynb), from the examples repository, has the encoder and decoder used together in the `EncoderDecoder` model class, and an optimizer chain with both the encoder and decoder optimizers.
 
-The criterion passed to the manager is the loss function and can either be a torch module that receives the output (returned by the `run()` method of the executor) and the target batch from the dataloader, or a function that expects a single parameter of type [BatchInOutParams](/src/auto_mind/supervised/_action_data.py#L531) that has properties related to the input, target, and the output of the executor, and should return a tensor. The function form is useful if you want to use the batch input, which is not passed to the module class (this requirement should be rare).
+The criterion passed to the manager is the loss function and can either be a torch module that receives the output (returned by the `run()` method of the executor) and the target batch from the dataloader, or a function that expects a single parameter of type [BatchInOutParams](/src/auto_mind/supervised/_action_data.py#L562) that has properties related to the input, target, and the output of the executor, and should return a tensor. The function form is useful if you want to use the batch input, which is not passed to the module class (this requirement should be rare).
 
 The `Evaluator` is an important component used to leverage the model for various tasks. For instance, if you want `manager.evaluate(input)` to return the string of a category based on an input that is the URL of an image, you can create an evaluator that performs the following steps: loads the image from the URL, converts it into a tensor, passes the tensor to the model, retrieves the category index from the model's output tensor, and then maps the index to the category name to return it. The `Evaluator` is versatile and not necessarily focused on performance assessment; it can handle a wide range of tasks involving model usage, including preprocessing inputs and post-processing outputs. It can even be used in scenarios where the goal is to just print or plot results rather than return a value. That said, the `Evaluator` is an optional component, and any actions can be performed on the trained model by calling `manager.load_model()` method first and using the model.
 

@@ -1,9 +1,10 @@
 # ruff: noqa: E741 (ambiguous variable name)
+# pylint: disable=too-many-branches
 import time
 import math
 import typing
 import torch
-import torch.nn as nn
+from torch import nn
 from torch import optim
 from auto_mind.supervised._action_data import (
     BaseResult, TestResult, TrainResult, ExecutionCursor, EarlyStopper,
@@ -132,7 +133,7 @@ class BatchHandler():
         """
         return
 
-    def skip(self, batch: int) -> bool: # pylint: disable=unused-argument
+    def skip(self, batch: int) -> bool:
         raise NotImplementedError()
 
     def run(
@@ -206,7 +207,7 @@ class GeneralBatchHandler(BatchHandler):
         get_results: typing.Callable[[], GeneralBatchHandlerResults],
         update_results: typing.Callable[[GeneralBatchHandlerResults], None],
         print_prefix: str,
-        get_batch_info: typing.Callable[[TrainBatchInfo[typing.Any]], str],
+        get_batch_info: typing.Callable[[TrainBatchInfo[typing.Any]], str | None],
         save_state: typing.Callable[[], None],
         metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any, typing.Any] | None,
         early_stopper: EarlyStopper | None = None,
@@ -404,7 +405,7 @@ class TrainBatchHandler(GeneralBatchHandler, typing.Generic[I, O, TG, MT]):
         epoch: int,
         params: TrainParams[I, O, TG, MT],
         results: TrainResult,
-        get_batch_info: typing.Callable[[TrainBatchInfo[typing.Any]], str],
+        get_batch_info: typing.Callable[[TrainBatchInfo[typing.Any]], str | None],
         save_state: typing.Callable[[TrainResult], None],
         metrics_handler: MetricsHandler[typing.Any, typing.Any, typing.Any, typing.Any] | None,
         early_stopper: EarlyStopper | None = None,

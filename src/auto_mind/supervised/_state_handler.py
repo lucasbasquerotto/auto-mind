@@ -245,7 +245,6 @@ def _save_state_dict(
         torch.save(state_dict, save_path)
 
         return state_dict
-    else:
-        warnings.warn('save_state_dict skipped: save_path is not defined', UserWarning)
 
+    warnings.warn('save_state_dict skipped: save_path is not defined', UserWarning)
     return None
